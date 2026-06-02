@@ -1,4 +1,4 @@
-# Semantic graph roadmap
+# Graph-It roadmap
 
 These additions are likely to deliver the most value for Clawpilot and team use.
 

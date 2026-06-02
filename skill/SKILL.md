@@ -1,9 +1,9 @@
 ---
-name: "semantic-graph-indexer"
-description: "Build reusable local semantic knowledge graphs for codebases and mixed project folders to reduce token consumption. Use when the user asks for graph indexing, queryable project maps, semantic repo indexes, code/document/media knowledge graphs, or agent navigation baselines."
+name: "graph-it"
+description: "Build reusable local semantic knowledge graphs for codebases and mixed project folders to reduce token consumption. Use when the user asks for Graph-It, graph indexing, queryable project maps, semantic repo indexes, code/document/media knowledge graphs, or agent navigation baselines."
 ---
 
-Use this skill when the user wants a reusable local semantic knowledge graph for a project, repository, documentation folder, or mixed corpus of code/docs/images/PDFs/videos. The goal is to reduce token consumption and improve agent navigation by creating a compact graph that can be queried before opening raw files.
+Use Graph-It when the user wants a reusable local semantic knowledge graph for a project, repository, documentation folder, or mixed corpus of code/docs/images/PDFs/videos. The goal is to reduce token consumption and improve agent navigation by creating a compact graph that can be queried before opening raw files.
 
 Core principles:
 1. Local-first by default. Do not send code, docs, screenshots, PDFs, or other project content to external services unless the user explicitly asks for an LLM/vision enrichment pass and confirms privacy implications.

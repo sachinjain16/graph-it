@@ -14,12 +14,12 @@ node .\tools\semantic-kg.mjs query "architecture"
 
 ## Use as a Clawpilot skill
 
-Copy the `skill` folder contents into your local Clawpilot skills directory under a folder named `semantic-graph-indexer`.
+Copy the `skill` folder contents into your local Clawpilot skills directory under a folder named `graph-it`.
 
 ```powershell
-New-Item -ItemType Directory -Force "$env:USERPROFILE\.copilot\m-skills\semantic-graph-indexer"
-Copy-Item .\skill\SKILL.md "$env:USERPROFILE\.copilot\m-skills\semantic-graph-indexer\SKILL.md" -Force
-Copy-Item .\tools\semantic-kg.mjs "$env:USERPROFILE\.copilot\m-skills\semantic-graph-indexer\semantic-kg-template.mjs" -Force
+New-Item -ItemType Directory -Force "$env:USERPROFILE\.copilot\m-skills\graph-it"
+Copy-Item .\skill\SKILL.md "$env:USERPROFILE\.copilot\m-skills\graph-it\SKILL.md" -Force
+Copy-Item .\tools\semantic-kg.mjs "$env:USERPROFILE\.copilot\m-skills\graph-it\semantic-kg-template.mjs" -Force
 ```
 
 Restart or refresh Clawpilot skill discovery if needed.

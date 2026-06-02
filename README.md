@@ -1,6 +1,6 @@
-# semantic-graph-indexer
+# Graph-It
 
-A local-first Clawpilot skill and portable Node.js template for building semantic knowledge graphs over codebases and mixed project folders.
+**Graph-It (semantic-graph-indexer)** is a local-first Clawpilot skill and portable Node.js template for building semantic knowledge graphs over codebases and mixed project folders.
 
 The goal is simple: query a compact graph before opening raw source/docs/media, reducing agent token consumption while preserving evidence boundaries.
 
@@ -127,7 +127,7 @@ The current template covers deterministic extraction, semantic topic edges, loca
 
 ## Clawpilot skill
 
-The reusable skill lives in `skill/SKILL.md`. Install it by copying the folder into a Clawpilot local skills directory, or keep this repo as the source for team customization.
+The reusable **Graph-It** skill lives in `skill/SKILL.md`. Install it by copying the folder into a Clawpilot local skills directory, or keep this repo as the source for team customization.
 
 Recommended trigger language:
 

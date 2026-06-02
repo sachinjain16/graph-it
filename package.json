@@ -1,8 +1,8 @@
 {
-  "name": "semantic-graph-indexer",
+  "name": "graph-it",
   "version": "0.1.0",
   "private": false,
-  "description": "Local-first semantic knowledge graph indexer for codebases and mixed project folders.",
+  "description": "Graph-It (semantic-graph-indexer): local-first semantic knowledge graph indexing for codebases and mixed project folders.",
   "type": "module",
   "bin": {
     "semantic-kg": "tools/semantic-kg.mjs"
