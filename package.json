@@ -1,0 +1,26 @@
+{
+  "name": "semantic-graph-indexer",
+  "version": "0.1.0",
+  "private": false,
+  "description": "Local-first semantic knowledge graph indexer for codebases and mixed project folders.",
+  "type": "module",
+  "bin": {
+    "semantic-kg": "tools/semantic-kg.mjs"
+  },
+  "scripts": {
+    "kg:build": "node tools/semantic-kg.mjs build",
+    "kg:stats": "node tools/semantic-kg.mjs stats",
+    "kg:query": "node tools/semantic-kg.mjs query",
+    "kg:baseline": "node tools/semantic-kg.mjs baseline",
+    "check": "node --check tools/semantic-kg.mjs"
+  },
+  "keywords": [
+    "knowledge-graph",
+    "semantic-index",
+    "agent-tools",
+    "local-first",
+    "clawpilot"
+  ],
+  "author": "Sachin Jain",
+  "license": "UNLICENSED"
+}
