@@ -35,7 +35,16 @@ const SEMANTIC_TOPICS = [
 const STOP = new Set(["the", "and", "for", "with", "this", "that", "from", "into", "your", "you", "are", "was", "were", "has", "have", "function", "const", "return", "class", "true", "false", "null", "undefined"]);
 
 function usage() {
-  console.log(`Semantic KG\n\nUsage:\n  node tools/semantic-kg.mjs build [--include-generated]\n  node tools/semantic-kg.mjs stats\n  node tools/semantic-kg.mjs query "terms"\n  node tools/semantic-kg.mjs baseline "query one" "query two"`);
+  console.log(`Semantic KG
+
+Usage:
+  node tools/semantic-kg.mjs build [--include-generated]
+  node tools/semantic-kg.mjs stats
+  node tools/semantic-kg.mjs query [--intent=code|docs|media|all] "terms"
+  node tools/semantic-kg.mjs impact "SymbolOrFile"
+  node tools/semantic-kg.mjs drift
+  node tools/semantic-kg.mjs path "A" "B"
+  node tools/semantic-kg.mjs baseline "query one" "query two"`);
 }
 function ensureDir(d) { fs.mkdirSync(d, { recursive: true }); }
 function posix(p) { return p.split(path.sep).join("/"); }
@@ -163,16 +172,173 @@ function build() {
 }
 function load() { if (!fs.existsSync(GRAPH_PATH)) throw new Error("Graph not found. Run build first."); return JSON.parse(fs.readFileSync(GRAPH_PATH, "utf8")); }
 function adj(g) { const nodes = new Map(g.nodes.map(n => [n.id, n])); const a = new Map(); for (const e of g.edges) { const f = nodes.get(e.from), t = nodes.get(e.to); if (!f || !t) continue; if (!a.has(e.from)) a.set(e.from, []); if (!a.has(e.to)) a.set(e.to, []); a.get(e.from).push({ dir: "out", type: e.type, node: t }); a.get(e.to).push({ dir: "in", type: e.type, node: f }); } return a; }
-function query(q) { const g = load(); const terms = tokenize(q).concat(String(q).toLowerCase().split(/\s+/).filter(Boolean)); const a = adj(g); const hits = g.nodes.map(n => { const hay = [n.id, n.kind, n.label, n.path, n.summary, n.caption, ...(n.tokens || []), ...(n.semanticTags || []), ...(n.aliases || [])].join(" ").toLowerCase(); let score = 0; for (const t of terms) { if (hay.includes(t)) score += 8; if (n.label?.toLowerCase() === t) score += 20; } for (const nb of (a.get(n.id) || []).slice(0, 50)) for (const t of terms) if (`${nb.type} ${nb.node.label} ${nb.node.path}`.toLowerCase().includes(t)) score += 2; return { n, score }; }).filter(x => x.score > 0).sort((x, y) => y.score - x.score).slice(0, 12);
-  for (const { n, score } of hits) { console.log(`\n[${score}] ${n.kind}: ${n.label}`); if (n.path) console.log(`  ${n.path}${n.line ? `:${n.line}` : ""}`); if (n.summary) console.log(`  ${n.summary}`); if (n.semanticTags?.length) console.log(`  Topics: ${n.semanticTags.join(", ")}`); for (const nb of (a.get(n.id) || []).slice(0, 8)) console.log(`  ${nb.dir === "out" ? "->" : "<-"} ${nb.type} ${nb.node.kind}:${nb.node.label}${nb.node.path ? ` (${nb.node.path}${nb.node.line ? `:${nb.node.line}` : ""})` : ""}`); }
+function parseQueryArgs(args) {
+  const opts = { intent: "auto", limit: 12 };
+  const rest = [];
+  for (const arg of args) {
+    if (arg.startsWith("--intent=")) opts.intent = arg.slice("--intent=".length).toLowerCase();
+    else if (arg === "--code") opts.intent = "code";
+    else if (arg === "--docs") opts.intent = "docs";
+    else if (arg === "--media") opts.intent = "media";
+    else if (arg.startsWith("--limit=")) opts.limit = Math.max(1, Math.min(30, Number(arg.slice("--limit=".length)) || 12));
+    else rest.push(arg);
+  }
+  opts.q = rest.join(" ").trim();
+  return opts;
+}
+function detectIntent(q, requested) {
+  if (requested && requested !== "auto") return requested;
+  const low = String(q).toLowerCase();
+  if (/\b(doc|docs|release|architecture|handbook|story|about|help|landing|readme|changelog)\b/.test(low)) return "docs";
+  if (/\b(image|png|jpg|svg|pdf|video|screenshot|media|asset)\b/.test(low)) return "media";
+  if (/[A-Z][A-Za-z0-9_]{2,}|[_:]/.test(q) || /\b(function|component|symbol|route|state|helper)\b/.test(low)) return "code";
+  return "all";
+}
+function queryTerms(q) {
+  const raw = String(q).split(/\s+/).map(s => s.trim()).filter(Boolean);
+  return {
+    raw,
+    terms: [...new Set(tokenize(q).concat(raw.map(s => s.toLowerCase())))],
+    identifiers: raw.filter(s => /[A-Z_:.]|^[a-zA-Z][a-zA-Z0-9_]{3,}$/.test(s)).map(s => s.replace(/^["'`]+|["'`]+$/g, "")),
+    phrase: String(q).toLowerCase().trim(),
+  };
+}
+function intentKindBoost(kind, intent) {
+  if (intent === "code") return { component:55, symbol:50, code_file:22, section:6, doc_file:-18, topic:-24 }[kind] || 0;
+  if (intent === "docs") return { doc_file:45, section:40, topic:14, code_file:-8, symbol:-12, component:-10 }[kind] || 0;
+  if (intent === "media") return { image_file:55, pdf_file:50, video_file:50, archive_file:30, doc_file:8, code_file:-18, symbol:-18 }[kind] || 0;
+  return { component:12, symbol:10, code_file:8, doc_file:8, section:7, topic:2 }[kind] || 0;
+}
+function isGenericSymbol(label) {
+  return ["node", "nodes", "item", "items", "next", "start", "step", "grid", "pick", "check", "correct", "update", "flash", "map", "data"].includes(String(label || "").toLowerCase());
+}
+function scoreNode(n, info, a, intent) {
+  const hay = [n.id, n.kind, n.label, n.path, n.summary, n.caption, ...(n.tokens || []), ...(n.semanticTags || []), ...(n.aliases || [])].join(" ").toLowerCase();
+  const label = String(n.label || "").toLowerCase();
+  const id = String(n.id || "").toLowerCase();
+  const p = String(n.path || "").toLowerCase();
+  let score = 0, matched = false;
+  if (info.phrase && (label === info.phrase || p === info.phrase || id.endsWith(`:${info.phrase}`))) { score += 180; matched = true; }
+  for (const t of info.terms) {
+    if (hay.includes(t)) { score += 8; matched = true; }
+    if (label === t) { score += 80; matched = true; }
+    if (id.endsWith(`:${t}`) || id.includes(`:${t}:`)) { score += 60; matched = true; }
+    if (p.includes(t)) { score += 10; matched = true; }
+  }
+  for (const ident of info.identifiers) {
+    const low = ident.toLowerCase();
+    if (label === low) { score += 220; matched = true; }
+    else if (label.includes(low)) { score += 90; matched = true; }
+    if (id.endsWith(`:${low}`) || id.includes(`:${low}:`)) { score += 120; matched = true; }
+    if (p.endsWith(low) || p.includes(`/${low}`)) { score += 45; matched = true; }
+  }
+  if (isGenericSymbol(n.label) && !info.identifiers.some(i => i.toLowerCase() === label)) score -= 90;
+  if (n.kind === "concept" && intent === "docs") score -= 280;
+  if (n.kind === "topic" && intent === "docs") score -= 90;
+  if (n.kind === "topic" && intent === "code") score -= 40;
+  for (const nb of (a.get(n.id) || []).slice(0, 80)) {
+    const low = `${nb.type} ${nb.node.label || ""} ${nb.node.path || ""}`.toLowerCase();
+    for (const t of info.terms) if (low.includes(t)) { score += 2; matched = true; }
+  }
+  return matched ? score + intentKindBoost(n.kind, intent) : 0;
+}
+function lineRange(line, radius = 80) {
+  const start = Math.max(1, Number(line || 1) - radius);
+  const end = Number(line || 1) + radius;
+  return `${start}-${end}`;
+}
+function printNextReads(n, a) {
+  const reads = [];
+  if (n.path && n.line) reads.push(`${n.path}:${lineRange(n.line)}`);
+  const neighbors = (a.get(n.id) || [])
+    .filter(x => x.node.path && x.node.line && ["REFERENCES", "DEFINES", "CONTAINS"].includes(x.type))
+    .sort((x, y) => (x.node.path === n.path ? 0 : 1) - (y.node.path === n.path ? 0 : 1) || (x.node.line || 0) - (y.node.line || 0));
+  for (const nb of neighbors) {
+    reads.push(`${nb.node.path}:${lineRange(nb.node.line, 45)} (${nb.node.kind}:${nb.node.label})`);
+    if (reads.length >= 4) break;
+  }
+  if (reads.length) { console.log("  Next reads:"); for (const r of reads) console.log(`    - ${r}`); }
+}
+function query(args) {
+  const opts = Array.isArray(args) ? parseQueryArgs(args) : { q: String(args || ""), intent: "auto", limit: 12 };
+  if (!opts.q) usage();
+  const g = load();
+  const a = adj(g);
+  const intent = detectIntent(opts.q, opts.intent);
+  const info = queryTerms(opts.q);
+  const hits = g.nodes
+    .map(n => ({ n, score: scoreNode(n, info, a, intent) }))
+    .filter(x => x.score > 0)
+    .sort((x, y) => y.score - x.score)
+    .slice(0, opts.limit);
+  console.log(`Intent: ${intent}`);
+  for (const { n, score } of hits) {
+    console.log(`\n[${score}] ${n.kind}: ${n.label}`);
+    if (n.path) console.log(`  ${n.path}${n.line ? `:${n.line}` : ""}`);
+    if (n.summary) console.log(`  ${n.summary}`);
+    if (n.semanticTags?.length) console.log(`  Topics: ${n.semanticTags.join(", ")}`);
+    for (const nb of (a.get(n.id) || []).slice(0, 8)) console.log(`  ${nb.dir === "out" ? "->" : "<-"} ${nb.type} ${nb.node.kind}:${nb.node.label}${nb.node.path ? ` (${nb.node.path}${nb.node.line ? `:${nb.node.line}` : ""})` : ""}`);
+    printNextReads(n, a);
+  }
+}
+function findNode(g, needle) {
+  const q = String(needle || "").toLowerCase();
+  const priority = { component:0, symbol:1, code_file:2, doc_file:3, section:4, topic:5, concept:6 };
+  const exact = g.nodes.filter(n => n.id.toLowerCase() === q || n.label?.toLowerCase() === q).sort((a, b) => (priority[a.kind] ?? 9) - (priority[b.kind] ?? 9));
+  return exact[0] || g.nodes.find(n => n.id.toLowerCase().includes(q) || n.label?.toLowerCase().includes(q) || n.path?.toLowerCase().includes(q));
+}
+function impact(needle) {
+  const g = load(); const n = findNode(g, needle); if (!n) throw new Error(`Could not resolve node: ${needle}`);
+  const a = adj(g); const neighbors = a.get(n.id) || [];
+  console.log(`Impact target: ${n.kind}:${n.label}${n.path ? ` (${n.path}${n.line ? `:${n.line}` : ""})` : ""}`);
+  if (n.path && n.line) console.log(`Primary read: ${n.path}:${lineRange(n.line)}`);
+  console.log("\nLikely code touchpoints:");
+  for (const x of neighbors.filter(x => ["component", "symbol", "code_file"].includes(x.node.kind) && x.node.path).slice(0, 12)) console.log(`  - ${x.node.kind}:${x.node.label} ${x.node.path}${x.node.line ? `:${x.node.line}` : ""} via ${x.type}`);
+  console.log("\nLikely docs / narrative touchpoints:");
+  const docs = neighbors.filter(x => ["doc_file", "section"].includes(x.node.kind) || /release|architecture|handbook|state|readme/i.test(x.node.path || "")).slice(0, 10);
+  if (!docs.length) console.log("  - README.md / release notes if behavior changes");
+  for (const x of docs) console.log(`  - ${x.node.kind}:${x.node.label} ${x.node.path || ""}${x.node.line ? `:${x.node.line}` : ""} via ${x.type}`);
+  console.log("\nSuggested validation:\n  - build/test command for this project\n  - graph rebuild\n  - graph query for changed symbol");
+}
+function drift() {
+  const surfaces = ["README.md", "ARCHITECTURE.md", "docs/handbook_content.js", "RELEASE_NOTES.md", "CHANGELOG.md"].filter(p => fs.existsSync(path.join(ROOT, p)));
+  const markers = [
+    { label:"Graph-It", terms:["Graph-It", "semantic knowledge graph"] },
+    { label:"local-first", terms:["local-first", "local first"] },
+    { label:"query", terms:["kg:query", "query"] },
+    { label:"baseline", terms:["baseline"] },
+  ];
+  console.log("Docs drift scan:");
+  let missingCount = 0;
+  for (const surface of surfaces) {
+    const text = fs.readFileSync(path.join(ROOT, surface), "utf8").toLowerCase();
+    const missing = markers.filter(m => !m.terms.some(t => text.includes(t.toLowerCase())));
+    console.log(`\n${surface}`);
+    if (!missing.length) console.log("  OK");
+    else for (const m of missing) { missingCount++; console.log(`  missing: ${m.label}`); }
+  }
+  console.log(`\nDrift result: ${missingCount ? `${missingCount} missing surface markers` : "no marker drift found"}`);
+}
+function pathBetween(aName, bName) {
+  const g = load(); const start = findNode(g, aName); const end = findNode(g, bName);
+  if (!start || !end) throw new Error(`Could not resolve nodes: ${!start ? aName : ""} ${!end ? bName : ""}`.trim());
+  const graphAdj = adj(g); const q = [start.id]; const prev = new Map([[start.id, null]]);
+  while (q.length) { const cur = q.shift(); if (cur === end.id) break; for (const nb of graphAdj.get(cur) || []) { if (prev.has(nb.node.id)) continue; prev.set(nb.node.id, { from: cur, via: nb.type }); q.push(nb.node.id); } }
+  if (!prev.has(end.id)) { console.log(`No path between ${start.label} and ${end.label}.`); return; }
+  const nodes = new Map(g.nodes.map(n => [n.id, n])); const steps = []; let cur = end.id;
+  while (cur) { const p = prev.get(cur); steps.push({ id: cur, via: p?.via }); cur = p?.from; }
+  steps.reverse().forEach((s, i) => { const n = nodes.get(s.id); console.log(`${i ? ` --${s.via}-- ` : ""}${n.kind}:${n.label}${n.path ? ` (${n.path}${n.line ? `:${n.line}` : ""})` : ""}`); });
 }
 function stats() { const g = load(); console.log(JSON.stringify(g.stats, null, 2)); }
-function baseline(args) { const qs = args.length ? args : ["architecture", "build deploy", "auth state", "ui component"]; const results = qs.map(q => { const start = Date.now(); let out = ""; const old = console.log; console.log = (...x) => { out += x.join(" ") + "\n"; }; query(q); console.log = old; return { query: q, ms: Date.now() - start, outputKB: Math.round(Buffer.byteLength(out) / 102.4) / 10 }; }); fs.writeFileSync(path.join(OUT_DIR, "baseline.json"), JSON.stringify({ generatedAt: new Date().toISOString(), tests: results }, null, 2)); console.table(results); }
+function baseline(args) { const qs = args.length ? args : ["architecture", "build deploy", "auth state", "ui component"]; const results = qs.map(q => { const start = Date.now(); let out = ""; const old = console.log; console.log = (...x) => { out += x.join(" ") + "\n"; }; query([q]); console.log = old; return { query: q, ms: Date.now() - start, outputKB: Math.round(Buffer.byteLength(out) / 102.4) / 10 }; }); fs.writeFileSync(path.join(OUT_DIR, "baseline.json"), JSON.stringify({ generatedAt: new Date().toISOString(), tests: results }, null, 2)); console.table(results); }
 
 const [cmd, ...args] = process.argv.slice(2);
 if (!cmd || cmd === "help" || cmd === "--help") usage();
 else if (cmd === "build") build();
 else if (cmd === "stats") stats();
-else if (cmd === "query") query(args.join(" "));
+else if (cmd === "query") query(args);
+else if (cmd === "impact") impact(args.join(" "));
+else if (cmd === "drift") drift();
+else if (cmd === "path") pathBetween(args[0] || "", args[1] || "");
 else if (cmd === "baseline") baseline(args);
 else { console.error(`Unknown command: ${cmd}`); usage(); process.exit(1); }

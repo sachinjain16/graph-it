@@ -11,6 +11,9 @@
     "kg:build": "node tools/semantic-kg.mjs build",
     "kg:stats": "node tools/semantic-kg.mjs stats",
     "kg:query": "node tools/semantic-kg.mjs query",
+    "kg:impact": "node tools/semantic-kg.mjs impact",
+    "kg:drift": "node tools/semantic-kg.mjs drift",
+    "kg:path": "node tools/semantic-kg.mjs path",
     "kg:baseline": "node tools/semantic-kg.mjs baseline",
     "check": "node --check tools/semantic-kg.mjs"
   },

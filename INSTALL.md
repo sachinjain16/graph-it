@@ -9,7 +9,9 @@ New-Item -ItemType Directory -Force C:\path\to\project\tools
 Copy-Item .\tools\semantic-kg.mjs C:\path\to\project\tools\semantic-kg.mjs
 Set-Location C:\path\to\project
 node .\tools\semantic-kg.mjs build
-node .\tools\semantic-kg.mjs query "architecture"
+node .\tools\semantic-kg.mjs query --intent=code "MyComponent"
+node .\tools\semantic-kg.mjs impact "MyComponent"
+node .\tools\semantic-kg.mjs drift
 ```
 
 ## Use as a Clawpilot skill

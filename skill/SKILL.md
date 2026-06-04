@@ -23,6 +23,10 @@ Preferred implementation shape:
   - `kg:build` or equivalent build command
   - `kg:stats`
   - `kg:query -- "terms"`
+  - `kg:query -- --intent=code "SymbolName"` for exact-symbol navigation
+  - `kg:query -- --intent=docs "release phrase"` for docs/release-note lookup
+  - `kg:impact -- "A"` for likely code/docs touchpoints and validation hints
+  - `kg:drift` for narrative/docs marker drift
   - optional `kg:path "A" "B"`
 - Add the generated graph output directory to `.gitignore` unless the user explicitly wants checked-in graph artifacts.
 - Update the project README or handoff state with the workflow and current graph stats.
@@ -40,20 +44,23 @@ Workflow:
 2. Decide exclusion rules before building. Exclude dependencies and generated artifacts unless requested.
 3. Create or adapt a local indexer. Prefer a single portable script with no required external dependencies.
 4. Build the graph and run `stats`.
-5. Run 3-5 representative query tests based on likely agent tasks.
-6. Compare query output KB against canonical raw files referenced by the query. Save the results to `.semantic-kg/baseline.json` or the project-specific graph folder.
-7. Tighten noisy topic aliases and query scoring if broad words dominate results.
-8. Document the workflow and graph stats.
-9. Save a user/project memory when appropriate so future sessions use the graph first.
+5. Run 3-5 representative query tests based on likely agent tasks, including at least one `--intent=code` exact-symbol lookup and one `--intent=docs` lookup.
+6. Run `impact` for one important component/symbol to verify code/docs touchpoints are useful.
+7. Run `drift` when the project has narrative docs or release notes that should stay aligned with shipped work.
+8. Compare query output KB against canonical raw files referenced by the query. Save the results to `.semantic-kg/baseline.json` or the project-specific graph folder.
+9. Tighten noisy topic aliases and query scoring if broad words dominate results.
+10. Document the workflow and graph stats.
+11. Save a user/project memory when appropriate so future sessions use the graph first.
 
 For colleagues or reusable delivery:
 - Present it as a local project tool plus a Clawpilot skill workflow.
 - Make it privacy-safe: no external content upload by default.
 - Make it easy to extend by editing a `SEMANTIC_TOPICS` array or config object.
 - Explain that deterministic extraction is not the same as full LLM understanding, but often provides 50x-300x less context for navigation tasks.
+- Prefer Graph-It v3 behavior when creating or updating templates: intent-aware ranking, exact-symbol prioritization, next-read line bundles, impact mode, drift checks, and baseline artifacts.
 
 When operating in LHQ+ specifically:
 - Work in `C:\dev\.liqplus-deploy`.
 - Use the existing tool `tools\lhq-kg.mjs` and output `.lhq-kg\graph.json`.
 - Preserve the deploy rule: never run `npm run deploy` or `npm run deploy:preview`.
-- Run `npm run kg:build`, `npm run kg:stats`, and representative `npm run kg:query -- "..."` tests before claiming the graph is useful.
+- Run `npm run kg:build`, `npm run kg:stats`, representative `npm run kg:query -- --intent=code "..."`, `npm run kg:impact -- "..."`, and `npm run kg:drift` before claiming the graph is useful.
