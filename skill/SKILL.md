@@ -26,7 +26,7 @@ Preferred implementation shape:
   - `kg:query -- --intent=code "SymbolName"` for exact-symbol navigation
   - `kg:query -- --intent=docs "release phrase"` for docs/release-note lookup
   - `kg:impact -- "A"` for likely code/docs touchpoints and validation hints
-  - `kg:drift` for narrative/docs marker drift
+  - `kg:drift` for narrative/docs marker drift, including `.semantic-kg/drift-report.json` and `.semantic-kg/drift-report.md` artifacts
   - optional `kg:path "A" "B"`
 - Add the generated graph output directory to `.gitignore` unless the user explicitly wants checked-in graph artifacts.
 - Update the project README or handoff state with the workflow and current graph stats.
@@ -46,7 +46,7 @@ Workflow:
 4. Build the graph and run `stats`.
 5. Run 3-5 representative query tests based on likely agent tasks, including at least one `--intent=code` exact-symbol lookup and one `--intent=docs` lookup.
 6. Run `impact` for one important component/symbol to verify code/docs touchpoints are useful.
-7. Run `drift` when the project has narrative docs or release notes that should stay aligned with shipped work.
+7. Run `drift` when the project has narrative docs or release notes that should stay aligned with shipped work. Check the console output and saved drift report artifacts.
 8. Compare query output KB against canonical raw files referenced by the query. Save the results to `.semantic-kg/baseline.json` or the project-specific graph folder.
 9. Tighten noisy topic aliases and query scoring if broad words dominate results.
 10. Document the workflow and graph stats.
@@ -57,7 +57,7 @@ For colleagues or reusable delivery:
 - Make it privacy-safe: no external content upload by default.
 - Make it easy to extend by editing a `SEMANTIC_TOPICS` array or config object.
 - Explain that deterministic extraction is not the same as full LLM understanding, but often provides 50x-300x less context for navigation tasks.
-- Prefer Graph-It v3 behavior when creating or updating templates: intent-aware ranking, exact-symbol prioritization, next-read line bundles, impact mode, drift checks, and baseline artifacts.
+- Prefer Graph-It v4 behavior when creating or updating templates: intent-aware ranking, exact-symbol prioritization, next-read line bundles, impact mode, drift report artifacts, and baseline artifacts.
 
 When operating in LHQ+ specifically:
 - Work in `C:\dev\.liqplus-deploy`.

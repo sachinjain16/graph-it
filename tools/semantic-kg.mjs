@@ -301,6 +301,7 @@ function impact(needle) {
   console.log("\nSuggested validation:\n  - build/test command for this project\n  - graph rebuild\n  - graph query for changed symbol");
 }
 function drift() {
+  ensureDir(OUT_DIR);
   const surfaces = ["README.md", "ARCHITECTURE.md", "docs/handbook_content.js", "RELEASE_NOTES.md", "CHANGELOG.md"].filter(p => fs.existsSync(path.join(ROOT, p)));
   const markers = [
     { label:"Graph-It", terms:["Graph-It", "semantic knowledge graph"] },
@@ -310,14 +311,33 @@ function drift() {
   ];
   console.log("Docs drift scan:");
   let missingCount = 0;
+  const rows = [];
   for (const surface of surfaces) {
     const text = fs.readFileSync(path.join(ROOT, surface), "utf8").toLowerCase();
     const missing = markers.filter(m => !m.terms.some(t => text.includes(t.toLowerCase())));
+    rows.push({ surface, exists: true, missing: missing.map(m => m.label) });
     console.log(`\n${surface}`);
     if (!missing.length) console.log("  OK");
     else for (const m of missing) { missingCount++; console.log(`  missing: ${m.label}`); }
   }
-  console.log(`\nDrift result: ${missingCount ? `${missingCount} missing surface markers` : "no marker drift found"}`);
+  const result = missingCount ? `${missingCount} missing surface markers` : "no marker drift found";
+  const report = { generatedAt: new Date().toISOString(), result, missingCount, rows };
+  fs.writeFileSync(path.join(OUT_DIR, "drift-report.json"), JSON.stringify(report, null, 2));
+  const md = [
+    "# Graph-It drift report",
+    "",
+    `Generated: ${report.generatedAt}`,
+    `Result: ${result}`,
+    "",
+    "| Surface | Status | Missing markers |",
+    "|---|---|---|",
+    ...rows.map(r => `| ${r.surface} | ${r.missing.length ? "Drift" : "OK"} | ${r.missing.join(", ") || "—"} |`),
+    ""
+  ].join("\n");
+  fs.writeFileSync(path.join(OUT_DIR, "drift-report.md"), md);
+  console.log(`\nDrift result: ${result}`);
+  console.log(`Wrote ${path.relative(ROOT, path.join(OUT_DIR, "drift-report.json"))}`);
+  console.log(`Wrote ${path.relative(ROOT, path.join(OUT_DIR, "drift-report.md"))}`);
 }
 function pathBetween(aName, bName) {
   const g = load(); const start = findNode(g, aName); const end = findNode(g, bName);

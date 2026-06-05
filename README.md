@@ -16,6 +16,7 @@ The goal is simple: query a compact graph before opening raw source/docs/media, 
 - Prioritizes docs/release-note sections with `--intent=docs`.
 - Suggests tight next-read line ranges for follow-up inspection.
 - Reports change impact and docs drift with dedicated commands.
+- Writes drift reports to `.semantic-kg/drift-report.json` and `.semantic-kg/drift-report.md`.
 - Avoids external uploads by default.
 
 ## Quick start
@@ -28,7 +29,7 @@ node .\tools\semantic-kg.mjs stats
 node .\tools\semantic-kg.mjs query --intent=code "MyComponent"
 node .\tools\semantic-kg.mjs query --intent=docs "release notes auth"
 node .\tools\semantic-kg.mjs impact "MyComponent"
-node .\tools\semantic-kg.mjs drift
+node .\tools\semantic-kg.mjs drift   # writes .semantic-kg/drift-report.{json,md}
 node .\tools\semantic-kg.mjs baseline "architecture" "build deploy" "auth state"
 ```
 
@@ -48,6 +49,7 @@ Copy-Item .\tools\semantic-kg.mjs C:\path\to\project\tools\semantic-kg.mjs
     "kg:query": "node tools/semantic-kg.mjs query",
     "kg:impact": "node tools/semantic-kg.mjs impact",
     "kg:drift": "node tools/semantic-kg.mjs drift",
+    "kg:drift:report": "node tools/semantic-kg.mjs drift",
     "kg:path": "node tools/semantic-kg.mjs path",
     "kg:baseline": "node tools/semantic-kg.mjs baseline"
   }
@@ -124,7 +126,7 @@ If you later add LLM or vision enrichment, make it opt-in and preserve evidence 
 
 ## High-value roadmap additions
 
-The current template covers deterministic extraction, semantic topic edges, intent-aware query, next-read ranges, impact mode, drift checks, and baseline measurement. The highest-value next additions are:
+The current template covers deterministic extraction, semantic topic edges, intent-aware query, next-read ranges, impact mode, drift checks with report artifacts, and baseline measurement. The highest-value next additions are:
 
 1. **Agent wiki export**: generate `.semantic-kg/wiki/index.md` plus one markdown page per topic/community so agents can crawl small human-readable pages instead of JSON.
 2. **Interactive graph viewer**: generate `.semantic-kg/graph.html` using a local/static vis-network or D3 view with search, filters, and evidence toggles.

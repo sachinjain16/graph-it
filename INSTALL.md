@@ -11,7 +11,7 @@ Set-Location C:\path\to\project
 node .\tools\semantic-kg.mjs build
 node .\tools\semantic-kg.mjs query --intent=code "MyComponent"
 node .\tools\semantic-kg.mjs impact "MyComponent"
-node .\tools\semantic-kg.mjs drift
+node .\tools\semantic-kg.mjs drift   # writes .semantic-kg\drift-report.json and .md
 ```
 
 ## Use as a Clawpilot skill

@@ -13,6 +13,7 @@
     "kg:query": "node tools/semantic-kg.mjs query",
     "kg:impact": "node tools/semantic-kg.mjs impact",
     "kg:drift": "node tools/semantic-kg.mjs drift",
+    "kg:drift:report": "node tools/semantic-kg.mjs drift",
     "kg:path": "node tools/semantic-kg.mjs path",
     "kg:baseline": "node tools/semantic-kg.mjs baseline",
     "check": "node --check tools/semantic-kg.mjs"
