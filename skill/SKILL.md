@@ -27,6 +27,13 @@ Preferred implementation shape:
   - `kg:query -- --intent=docs "release phrase"` for docs/release-note lookup
   - `kg:impact -- "A"` for likely code/docs touchpoints and validation hints
   - `kg:drift` for narrative/docs marker drift, including `.semantic-kg/drift-report.json` and `.semantic-kg/drift-report.md` artifacts
+  - `kg:delta` for changed files, semantic neighborhood movement, new inferred edges, isolated nodes, and recommended rereads
+  - `kg:wiki` for agent-readable markdown pages under `.semantic-kg/wiki/`, including topic pages and a community report
+  - `kg:viewer` for a standalone local `.semantic-kg/graph.html` viewer with search, filters, and node details
+  - `kg:watch` for refreshing graph/wiki/viewer artifacts during active editing
+  - `kg:hook:install` for installing a managed post-commit hook that refreshes local graph artifacts
+  - `kg:mcp` for exposing graph query/path/stats/node/neighborhood/build over MCP stdio
+  - `kg:mcp:config` for generating local MCP client snippets and optional graph.stats/graph.delta smoke checks
   - optional `kg:path "A" "B"`
 - Add the generated graph output directory to `.gitignore` unless the user explicitly wants checked-in graph artifacts.
 - Update the project README or handoff state with the workflow and current graph stats.
@@ -57,7 +64,7 @@ For colleagues or reusable delivery:
 - Make it privacy-safe: no external content upload by default.
 - Make it easy to extend by editing a `SEMANTIC_TOPICS` array or config object.
 - Explain that deterministic extraction is not the same as full LLM understanding, but often provides 50x-300x less context for navigation tasks.
-- Prefer Graph-It v4 behavior when creating or updating templates: intent-aware ranking, exact-symbol prioritization, next-read line bundles, impact mode, drift report artifacts, and baseline artifacts.
+- Prefer current Graph-It behavior when creating or updating templates: intent-aware ranking, exact-symbol prioritization, next-read line bundles, impact mode, drift report artifacts, delta reports, agent wiki export, community reporting, watch/hook refresh, MCP server mode, MCP config helper, and baseline artifacts.
 
 When operating in LHQ+ specifically:
 - Work in `C:\dev\.liqplus-deploy`.

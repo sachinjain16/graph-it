@@ -14,6 +14,13 @@
     "kg:impact": "node tools/semantic-kg.mjs impact",
     "kg:drift": "node tools/semantic-kg.mjs drift",
     "kg:drift:report": "node tools/semantic-kg.mjs drift",
+    "kg:delta": "node tools/semantic-kg.mjs delta",
+    "kg:wiki": "node tools/semantic-kg.mjs wiki",
+    "kg:viewer": "node tools/semantic-kg.mjs viewer",
+    "kg:watch": "node tools/semantic-kg.mjs watch",
+    "kg:hook:install": "node tools/semantic-kg.mjs hook install",
+    "kg:mcp": "node tools/semantic-kg.mjs mcp",
+    "kg:mcp:config": "node tools/semantic-kg.mjs mcp-config",
     "kg:path": "node tools/semantic-kg.mjs path",
     "kg:baseline": "node tools/semantic-kg.mjs baseline",
     "check": "node --check tools/semantic-kg.mjs"

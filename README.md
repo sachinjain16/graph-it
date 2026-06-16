@@ -17,6 +17,13 @@ The goal is simple: query a compact graph before opening raw source/docs/media, 
 - Suggests tight next-read line ranges for follow-up inspection.
 - Reports change impact and docs drift with dedicated commands.
 - Writes drift reports to `.semantic-kg/drift-report.json` and `.semantic-kg/drift-report.md`.
+- Reports graph deltas across builds with changed files, changed neighborhoods, new inferred edges, isolated nodes, and recommended rereads.
+- Exports an agent-readable wiki with topic pages and a community report.
+- Generates a standalone interactive graph viewer at `.semantic-kg/graph.html`.
+- Watches project changes and refreshes graph/wiki/viewer artifacts.
+- Installs a managed post-commit hook to keep local graph artifacts fresh after commits.
+- Exposes graph query, path, stats, node, neighborhood, and build tools through MCP stdio server mode.
+- Generates copy-ready MCP client configuration for the current project.
 - Avoids external uploads by default.
 
 ## Quick start
@@ -30,14 +37,24 @@ node .\tools\semantic-kg.mjs query --intent=code "MyComponent"
 node .\tools\semantic-kg.mjs query --intent=docs "release notes auth"
 node .\tools\semantic-kg.mjs impact "MyComponent"
 node .\tools\semantic-kg.mjs drift   # writes .semantic-kg/drift-report.{json,md}
+node .\tools\semantic-kg.mjs delta   # writes .semantic-kg/delta-report.{json,md}
+node .\tools\semantic-kg.mjs wiki    # writes .semantic-kg/wiki/
+node .\tools\semantic-kg.mjs viewer  # writes .semantic-kg/graph.html
+node .\tools\semantic-kg.mjs watch   # refreshes local graph artifacts as files change
+node .\tools\semantic-kg.mjs hook install
+node .\tools\semantic-kg.mjs mcp     # MCP stdio server for agent tools
+node .\tools\semantic-kg.mjs mcp-config --smoke-test
 node .\tools\semantic-kg.mjs baseline "architecture" "build deploy" "auth state"
 ```
 
-To use it in another project, copy the template from here into the target repo:
+## Use Graph-It in another repo
 
-```powershell
-Copy-Item .\tools\semantic-kg.mjs C:\path\to\project\tools\semantic-kg.mjs
-```
+1. Copy `tools\semantic-kg.mjs` into the target repo at `tools\semantic-kg.mjs`.
+2. Add the package scripts below if the target repo uses npm.
+3. Add `.semantic-kg/` to the target repo's `.gitignore`.
+4. Run `npm run kg:build`, then `npm run kg:mcp:config -- --smoke-test`.
+5. Copy the generated MCP snippet into your MCP client settings.
+6. Use `graph.stats` to confirm the server is connected, then use `graph.query` before opening raw files and `graph.delta` after rebuilds.
 
 ## Suggested package scripts
 
@@ -50,6 +67,13 @@ Copy-Item .\tools\semantic-kg.mjs C:\path\to\project\tools\semantic-kg.mjs
     "kg:impact": "node tools/semantic-kg.mjs impact",
     "kg:drift": "node tools/semantic-kg.mjs drift",
     "kg:drift:report": "node tools/semantic-kg.mjs drift",
+    "kg:delta": "node tools/semantic-kg.mjs delta",
+    "kg:wiki": "node tools/semantic-kg.mjs wiki",
+    "kg:viewer": "node tools/semantic-kg.mjs viewer",
+    "kg:watch": "node tools/semantic-kg.mjs watch",
+    "kg:hook:install": "node tools/semantic-kg.mjs hook install",
+    "kg:mcp": "node tools/semantic-kg.mjs mcp",
+    "kg:mcp:config": "node tools/semantic-kg.mjs mcp-config",
     "kg:path": "node tools/semantic-kg.mjs path",
     "kg:baseline": "node tools/semantic-kg.mjs baseline"
   }
@@ -124,18 +148,41 @@ This project is local-first. The included template does not call external APIs a
 
 If you later add LLM or vision enrichment, make it opt-in and preserve evidence labels so users can distinguish extracted facts from inferred interpretations.
 
+## MCP server mode
+
+Run Graph-It as a dependency-free MCP stdio server:
+
+```powershell
+node .\tools\semantic-kg.mjs mcp
+```
+
+Available MCP tools:
+
+- `graph.stats`: returns graph counts and artifact metadata.
+- `graph.query`: returns ranked nodes, nearby relationships, and suggested next-read ranges.
+- `graph.path`: finds the shortest known relationship path between two nodes.
+- `graph.node`: resolves and inspects one node by id, label, symbol, or path fragment.
+- `graph.neighborhood`: returns a compact local neighborhood around a node.
+- `graph.build`: rebuilds the local graph artifact.
+- `graph.delta`: compares the current graph with the previous build snapshot and returns recommended rereads.
+- `graph.mcp_config`: returns copy-ready local MCP configuration for this project.
+
+This lets coding agents query `.semantic-kg/graph.json` before opening raw files. The server communicates only over stdio and keeps project content local unless the host agent separately sends tool results elsewhere.
+
+Generate MCP client configuration for the current repo:
+
+```powershell
+node .\tools\semantic-kg.mjs mcp-config --smoke-test
+```
+
+The helper validates the local tool and graph artifact, emits generic, Claude Desktop, and Clawpilot-compatible MCP snippets, and can smoke-test `graph.stats` plus `graph.delta`.
+
 ## High-value roadmap additions
 
-The current template covers deterministic extraction, semantic topic edges, intent-aware query, next-read ranges, impact mode, drift checks with report artifacts, and baseline measurement. The highest-value next additions are:
+The current template covers deterministic extraction, semantic topic edges, intent-aware query, next-read ranges, impact mode, drift checks with report artifacts, delta reports, agent wiki export, community reporting, interactive graph viewing, watch/hook refresh, MCP server mode, MCP config generation, and baseline measurement. The highest-value next additions are:
 
-1. **Agent wiki export**: generate `.semantic-kg/wiki/index.md` plus one markdown page per topic/community so agents can crawl small human-readable pages instead of JSON.
-2. **Interactive graph viewer**: generate `.semantic-kg/graph.html` using a local/static vis-network or D3 view with search, filters, and evidence toggles.
-3. **Community detection**: cluster graph nodes into project areas and surface god nodes, bridge nodes, and surprising cross-community links.
-4. **Watch mode and git hook**: rebuild changed-file indexes on save or post-commit so the graph stays current during multi-agent development.
-5. **GraphML / Neo4j / Cypher exports**: allow Gephi, yEd, Neo4j, and other graph tools to consume the project map.
-6. **Media enrichment adapters**: add optional local OCR/PDF text extraction and opt-in multimodal captioning, with privacy warnings before any external model use.
-7. **MCP server mode**: expose graph query/path/stats over stdio so coding agents can query the graph directly.
-8. **Delta reports**: show what changed between graph builds and whether new files created new semantic neighborhoods.
+1. **GraphML / Neo4j / Cypher exports**: allow Gephi, yEd, Neo4j, and other graph tools to consume the project map.
+2. **Media enrichment adapters**: add optional local OCR/PDF text extraction and opt-in multimodal captioning, with privacy warnings before any external model use.
 
 ## Clawpilot skill
 
