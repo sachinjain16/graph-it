@@ -11,6 +11,8 @@ const GRAPH_PATH = path.join(OUT_DIR, "graph.json");
 const PREVIOUS_GRAPH_PATH = path.join(OUT_DIR, "previous-graph.json");
 const DELTA_REPORT_JSON = path.join(OUT_DIR, "delta-report.json");
 const DELTA_REPORT_MD = path.join(OUT_DIR, "delta-report.md");
+const QUALITY_JSON = path.join(OUT_DIR, "quality.json");
+const QUALITY_MD = path.join(OUT_DIR, "quality.md");
 const CACHE_DIR = path.join(OUT_DIR, "cache");
 const WIKI_DIR = path.join(OUT_DIR, "wiki");
 const VIEWER_PATH = path.join(OUT_DIR, "graph.html");
@@ -53,6 +55,10 @@ Usage:
   node tools/semantic-kg.mjs delta
   node tools/semantic-kg.mjs wiki
   node tools/semantic-kg.mjs viewer
+  node tools/semantic-kg.mjs quality
+  node tools/semantic-kg.mjs obsidian
+  node tools/semantic-kg.mjs ingest <file-or-folder> [...]
+  node tools/semantic-kg.mjs enrich [--provider local]
   node tools/semantic-kg.mjs watch
   node tools/semantic-kg.mjs hook install
   node tools/semantic-kg.mjs mcp
@@ -447,6 +453,154 @@ function neighborhoodResult(needle, depth = 1, limit = 40) {
   };
 }
 function baseline(args) { const qs = args.length ? args : ["architecture", "build deploy", "auth state", "ui component"]; const results = qs.map(q => { const start = Date.now(); let out = ""; const old = console.log; console.log = (...x) => { out += x.join(" ") + "\n"; }; query([q]); console.log = old; return { query: q, ms: Date.now() - start, outputKB: Math.round(Buffer.byteLength(out) / 102.4) / 10 }; }); fs.writeFileSync(path.join(OUT_DIR, "baseline.json"), JSON.stringify({ generatedAt: new Date().toISOString(), tests: results }, null, 2)); console.table(results); }
+
+function computeQuality(g) {
+  const graphAdj = adj(g);
+  const degrees = degreeMap(g);
+  const nonTopicNodes = g.nodes.filter(n => n.kind !== "topic");
+  const orphanNodes = nonTopicNodes.filter(n => (degrees.get(n.id) || 0) === 0);
+  const weakEdges = g.edges.filter(e => e.evidence === "INFERRED" && Number(e.confidence || 0) < 0.7);
+  const duplicateLabels = [...new Map(
+    [...new Map(g.nodes.map(n => [String(n.label || n.id).toLowerCase(), []])).keys()]
+      .map(label => [label, g.nodes.filter(n => String(n.label || n.id).toLowerCase() === label)])
+      .filter(([, nodes]) => nodes.length > 1)
+  ).entries()].map(([label, nodes]) => ({ label, count: nodes.length, nodes: nodes.slice(0, 10).map(n => n.id) }));
+  const maxDegree = Math.max(1, ...[...degrees.values()]);
+  const godNodeThreshold = Math.max(12, Math.ceil(g.nodes.length * 0.18));
+  const godNodes = g.nodes
+    .map(n => ({ id: n.id, label: n.label, kind: n.kind, degree: degrees.get(n.id) || 0 }))
+    .filter(n => n.degree >= godNodeThreshold)
+    .sort((a, b) => b.degree - a.degree)
+    .slice(0, 20);
+  const sourceCoverage = nonTopicNodes.filter(n => n.path || n.file || n.summary).length / Math.max(1, nonTopicNodes.length);
+  const connectivity = 1 - orphanNodes.length / Math.max(1, nonTopicNodes.length);
+  const weakPenalty = Math.min(25, weakEdges.length / Math.max(1, g.edges.length) * 100);
+  const duplicatePenalty = Math.min(15, duplicateLabels.length * 2);
+  const godPenalty = Math.min(15, godNodes.length * 3);
+  const score = Math.max(0, Math.round((connectivity * 55) + (sourceCoverage * 25) + 20 - weakPenalty - duplicatePenalty - godPenalty));
+  const recommendations = [];
+  if (orphanNodes.length) recommendations.push(`Connect or prune ${orphanNodes.length} orphan node(s).`);
+  if (godNodes.length) recommendations.push(`Split or better type ${godNodes.length} god-node candidate(s).`);
+  if (weakEdges.length) recommendations.push(`Review ${weakEdges.length} low-confidence inferred edge(s).`);
+  if (duplicateLabels.length) recommendations.push(`Disambiguate ${duplicateLabels.length} duplicate label group(s).`);
+  if (!recommendations.length) recommendations.push("Graph structure looks healthy. Keep indexing after meaningful changes.");
+  return {
+    generatedAt: new Date().toISOString(),
+    score,
+    grade: score >= 90 ? "excellent" : score >= 75 ? "good" : score >= 60 ? "needs-attention" : "weak",
+    stats: g.stats || { nodes: g.nodes.length, edges: g.edges.length },
+    metrics: {
+      connectivity: Number(connectivity.toFixed(3)),
+      sourceCoverage: Number(sourceCoverage.toFixed(3)),
+      maxDegree,
+      orphanCount: orphanNodes.length,
+      weakEdgeCount: weakEdges.length,
+      duplicateLabelGroups: duplicateLabels.length,
+      godNodeCount: godNodes.length,
+    },
+    orphanNodes: orphanNodes.slice(0, 50).map(n => compactNode(n)),
+    godNodes,
+    weakEdges: weakEdges.slice(0, 50).map(e => edgeSummary(e, new Map(g.nodes.map(n => [n.id, n])))),
+    duplicateLabels: duplicateLabels.slice(0, 50),
+    recommendations,
+    nextIndexingActions: [
+      "Run `node tools/semantic-kg.mjs obsidian` for durable vault-style notes.",
+      "Run `node tools/semantic-kg.mjs viewer` after quality changes.",
+      "Stage non-code docs with `node tools/semantic-kg.mjs ingest <path>` before extracting text.",
+    ],
+  };
+}
+function renderQualityMarkdown(q) {
+  return `# Graph-It Quality\n\nGenerated: ${q.generatedAt}\n\nScore: **${q.score}/100** (${q.grade})\n\n## Metrics\n\n| Metric | Value |\n|---|---:|\n| Connectivity | ${q.metrics.connectivity} |\n| Source coverage | ${q.metrics.sourceCoverage} |\n| Orphan nodes | ${q.metrics.orphanCount} |\n| Weak inferred edges | ${q.metrics.weakEdgeCount} |\n| Duplicate label groups | ${q.metrics.duplicateLabelGroups} |\n| God-node candidates | ${q.metrics.godNodeCount} |\n| Max degree | ${q.metrics.maxDegree} |\n\n## Recommendations\n\n${q.recommendations.map(x => `- ${md(x)}`).join("\n")}\n\n## God-node candidates\n\n${q.godNodes.length ? q.godNodes.map(n => `- ${md(n.label || n.id)} (${n.kind}, degree ${n.degree})`).join("\n") : "- None"}\n\n## Orphan nodes\n\n${q.orphanNodes.length ? q.orphanNodes.slice(0, 25).map(n => `- ${md(n.label || n.id)} (${n.kind})`).join("\n") : "- None"}\n`;
+}
+function quality() {
+  const q = computeQuality(load());
+  ensureDir(OUT_DIR);
+  fs.writeFileSync(QUALITY_JSON, JSON.stringify(q, null, 2));
+  fs.writeFileSync(QUALITY_MD, renderQualityMarkdown(q));
+  const summaryPath = path.join(OUT_DIR, "quality-summary.json");
+  fs.writeFileSync(summaryPath, JSON.stringify({ score: q.score, grade: q.grade, metrics: q.metrics, recommendations: q.recommendations }, null, 2));
+  console.log(`Graph-It quality: ${q.score}/100 (${q.grade})`);
+  console.log(`Wrote ${path.relative(ROOT, QUALITY_MD)}`);
+}
+
+function yamlValue(v) { return String(v ?? "").replace(/"/g, '\\"'); }
+function obsidianFolder(n) {
+  if (n.kind === "topic") return "concepts";
+  if (n.kind === "doc" || DOC_EXTS.has(n.ext)) return "docs";
+  if (n.kind === "image" || n.kind === "pdf" || n.kind === "video" || n.kind === "archive") return "artifacts";
+  if (n.kind === "symbol" || n.kind === "component") return "symbols";
+  return "files";
+}
+function obsidianFileName(n) { return `${slug(n.label || n.id)}.md`; }
+function obsidianLink(n) { return `[[${obsidianFileName(n).replace(/\.md$/, "")}|${n.label || n.id}]]`; }
+function obsidianNodeMarkdown(n, related) {
+  const tags = [...new Set([n.kind, ...(n.semanticTags || []).map(slug)].filter(Boolean))];
+  return `---\nid: "${yamlValue(n.id)}"\ntype: "${yamlValue(n.kind)}"\nsource: "${yamlValue(n.path || "")}"\ntags: [${tags.map(t => `"${yamlValue(t)}"`).join(", ")}]\n---\n\n# ${n.label || n.id}\n\n${n.summary || "No summary available."}\n\n${n.path ? `Source: \`${n.path}\`\n\n` : ""}## Related\n\n${related.length ? related.slice(0, 30).map(({ edge, node }) => `- ${obsidianLink(node)} — ${edge.type}${edge.why ? ` (${md(edge.why)})` : ""}`).join("\n") : "- None"}\n`;
+}
+function obsidian() {
+  const g = load();
+  const graphAdj = adj(g);
+  const nodes = new Map(g.nodes.map(n => [n.id, n]));
+  const vault = path.join(WIKI_DIR, "obsidian");
+  fs.rmSync(vault, { recursive: true, force: true });
+  ensureDir(vault);
+  for (const n of g.nodes) {
+    const folder = path.join(vault, obsidianFolder(n));
+    ensureDir(folder);
+    const related = (graphAdj.get(n.id) || []).map(nb => ({
+      edge: g.edges.find(e => (e.from === n.id && e.to === nb.node.id) || (e.to === n.id && e.from === nb.node.id)) || { type: nb.type },
+      node: nodes.get(nb.node.id),
+    })).filter(x => x.node);
+    fs.writeFileSync(path.join(folder, obsidianFileName(n)), obsidianNodeMarkdown(n, related));
+  }
+  const q = computeQuality(g);
+  fs.writeFileSync(path.join(vault, "Graph-It Index.md"), `# Graph-It Index\n\nScore: **${q.score}/100** (${q.grade})\n\n## Folders\n\n- [[concepts]]\n- [[docs]]\n- [[files]]\n- [[symbols]]\n- [[artifacts]]\n\n## Top nodes\n\n${[...degreeMap(g).entries()].sort((a,b)=>b[1]-a[1]).slice(0,20).map(([id,d]) => `- ${obsidianLink(nodes.get(id) || { id, label: id })} — degree ${d}`).join("\n")}\n`);
+  fs.writeFileSync(path.join(vault, "Graph Quality.md"), renderQualityMarkdown(q));
+  console.log(`Obsidian vault exported to ${path.relative(ROOT, vault)}`);
+}
+
+function isIngestible(abs) {
+  return new Set([".md", ".txt", ".rst", ".html", ".csv", ".json", ".docx", ".pptx", ".xlsx", ".pdf"]).has(path.extname(abs).toLowerCase());
+}
+function ingest(args) {
+  if (!args.length) { console.log("Usage: node tools/semantic-kg.mjs ingest <file-or-folder> [...]"); return; }
+  const ingestDir = path.join(OUT_DIR, "ingest");
+  ensureDir(ingestDir);
+  const items = [];
+  for (const input of args) {
+    const abs = path.resolve(input);
+    if (!fs.existsSync(abs)) { items.push({ source: input, status: "missing" }); continue; }
+    const files = fs.statSync(abs).isDirectory() ? walk(abs).filter(isIngestible) : [abs].filter(isIngestible);
+    for (const file of files) {
+      const staged = path.join(ingestDir, `${slug(rel(file))}${path.extname(file)}`);
+      fs.copyFileSync(file, staged);
+      items.push({ source: rel(file), staged: rel(staged), status: "staged" });
+    }
+  }
+  fs.writeFileSync(path.join(ingestDir, "manifest.json"), JSON.stringify({ generatedAt: new Date().toISOString(), items, note: "Local staging only. Extract binary docs to markdown before rich indexing." }, null, 2));
+  console.log(`Staged ${items.filter(i => i.status === "staged").length} file(s) in ${path.relative(ROOT, ingestDir)}`);
+}
+
+function enrich(args) {
+  const g = load();
+  const providerIdx = args.indexOf("--provider");
+  const provider = providerIdx >= 0 ? args[providerIdx + 1] : "local";
+  const plan = {
+    generatedAt: new Date().toISOString(),
+    provider,
+    status: "plan-only",
+    privacy: "No content was sent to any model by this command.",
+    candidateNodes: g.nodes.filter(n => n.kind !== "topic").slice(0, 50).map(n => compactNode(n)),
+    nextSteps: [
+      "Choose an approved local/provider path.",
+      "Generate proposed summaries and relationships into enrichment.proposed.json.",
+      "Review before merging into graph.json.",
+    ],
+  };
+  fs.writeFileSync(path.join(OUT_DIR, "enrichment-plan.json"), JSON.stringify(plan, null, 2));
+  console.log("Wrote .semantic-kg/enrichment-plan.json");
+}
 function edgeKey(e) {
   return `${e.from}\0${e.type}\0${e.to}`;
 }
@@ -842,6 +996,7 @@ function safeScriptJson(value) {
 }
 function viewerHtml(g) {
   const data = safeScriptJson(g);
+  const qualityData = safeScriptJson(computeQuality(g));
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -877,10 +1032,14 @@ function viewerHtml(g) {
     .checks { display: flex; flex-direction: column; gap: 7px; max-height: 190px; overflow: auto; padding-right: 3px; }
     .check { display: flex; align-items: center; gap: 8px; font-size: 13px; color: #cbd5e1; }
     .check input { accent-color: var(--accent); }
-    .summary { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 14px; }
-    .stat { padding: 10px; border: 1px solid var(--line); border-radius: 12px; background: #020617; }
-    .stat strong { display: block; font-size: 20px; }
-    .stat span { color: var(--muted); font-size: 12px; }
+     .summary { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 14px; }
+     .stat { padding: 10px; border: 1px solid var(--line); border-radius: 12px; background: #020617; }
+     .stat strong { display: block; font-size: 20px; }
+     .stat span { color: var(--muted); font-size: 12px; }
+     .quality { margin-top: 14px; padding: 12px; border: 1px solid var(--line); border-radius: 12px; background: #020617; }
+     .quality-score { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+     .quality-score strong { color: var(--ok); font-size: 26px; }
+     .quality ul { margin: 10px 0 0; padding-left: 18px; color: #cbd5e1; font-size: 12px; line-height: 1.45; }
     .toolbar { position: absolute; left: 14px; top: 14px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 999px; background: rgba(2,6,23,.86); color: var(--muted); font-size: 12px; backdrop-filter: blur(10px); }
     .legend { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
     .pill { display: inline-flex; align-items: center; gap: 6px; padding: 5px 8px; border-radius: 999px; background: var(--chip); color: #cbd5e1; font-size: 12px; }
@@ -918,11 +1077,12 @@ function viewerHtml(g) {
       <div class="checks" id="topicFilters"></div>
       <label>Evidence</label>
       <div class="checks" id="evidenceFilters"></div>
-      <div class="summary">
-        <div class="stat"><strong id="nodeCount">0</strong><span>visible nodes</span></div>
-        <div class="stat"><strong id="edgeCount">0</strong><span>visible edges</span></div>
-      </div>
-      <div class="legend" id="legend"></div>
+       <div class="summary">
+         <div class="stat"><strong id="nodeCount">0</strong><span>visible nodes</span></div>
+         <div class="stat"><strong id="edgeCount">0</strong><span>visible edges</span></div>
+       </div>
+       <div class="quality" id="qualityPanel"></div>
+       <div class="legend" id="legend"></div>
     </aside>
     <div class="canvas-wrap">
       <div class="toolbar">Drag-free local SVG. Filter to simplify dense graphs.</div>
@@ -933,9 +1093,11 @@ function viewerHtml(g) {
       <p class="empty">Click a circle to inspect its file path, summary, semantic tags, and nearby relationships.</p>
     </section>
   </main>
-  <script id="graph-data" type="application/json">${data}</script>
-  <script>
-    const graph = JSON.parse(document.getElementById("graph-data").textContent);
+   <script id="graph-data" type="application/json">${data}</script>
+   <script id="quality-data" type="application/json">${qualityData}</script>
+   <script>
+     const graph = JSON.parse(document.getElementById("graph-data").textContent);
+     const quality = JSON.parse(document.getElementById("quality-data").textContent);
     const nodesById = new Map(graph.nodes.map(n => [n.id, n]));
     const degrees = new Map(graph.nodes.map(n => [n.id, 0]));
     for (const edge of graph.edges) {
@@ -948,9 +1110,13 @@ function viewerHtml(g) {
     const kindFilters = document.getElementById("kindFilters");
     const topicFilters = document.getElementById("topicFilters");
     const evidenceFilters = document.getElementById("evidenceFilters");
-    const details = document.getElementById("details");
-    const meta = document.getElementById("meta");
-    meta.textContent = "Root: " + graph.root + " · generated " + graph.generatedAt + " · " + graph.nodes.length + " nodes / " + graph.edges.length + " edges";
+     const details = document.getElementById("details");
+     const meta = document.getElementById("meta");
+     meta.textContent = "Root: " + graph.root + " · generated " + graph.generatedAt + " · " + graph.nodes.length + " nodes / " + graph.edges.length + " edges";
+     document.getElementById("qualityPanel").innerHTML =
+       '<div class="quality-score"><span class="muted">Quality</span><strong>' + esc(quality.score) + '/100</strong></div>' +
+       '<div class="sub">' + esc(quality.grade) + ' · ' + esc(quality.metrics.orphanCount) + ' orphans · ' + esc(quality.metrics.weakEdgeCount) + ' weak edges</div>' +
+       '<ul>' + quality.recommendations.slice(0, 3).map(r => '<li>' + esc(r) + '</li>').join('') + '</ul>';
 
     function esc(text) {
       return String(text == null ? "" : text).replace(/[&<>"']/g, c => {
@@ -1483,6 +1649,10 @@ else if (cmd === "drift") drift();
 else if (cmd === "delta") delta();
 else if (cmd === "wiki") wiki();
 else if (cmd === "viewer") viewer();
+else if (cmd === "quality") quality();
+else if (cmd === "obsidian") obsidian();
+else if (cmd === "ingest") ingest(args);
+else if (cmd === "enrich") enrich(args);
 else if (cmd === "watch") watch(args);
 else if (cmd === "hook") hook(args);
 else if (cmd === "mcp") mcp();

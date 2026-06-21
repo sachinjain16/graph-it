@@ -20,6 +20,10 @@ The goal is simple: query a compact graph before opening raw source/docs/media, 
 - Reports graph deltas across builds with changed files, changed neighborhoods, new inferred edges, isolated nodes, and recommended rereads.
 - Exports an agent-readable wiki with topic pages and a community report.
 - Generates a standalone interactive graph viewer at `.semantic-kg/graph.html`.
+- Scores graph quality with orphan, god-node, weak-edge, duplicate-label, and source-coverage checks.
+- Exports an Obsidian-friendly vault with YAML frontmatter, tags, backlinks, and note-type folders.
+- Stages mixed documents locally for future extraction/enrichment workflows.
+- Creates a privacy-safe opt-in enrichment plan without calling a model.
 - Watches project changes and refreshes graph/wiki/viewer artifacts.
 - Installs a managed post-commit hook to keep local graph artifacts fresh after commits.
 - Exposes graph query, path, stats, node, neighborhood, and build tools through MCP stdio server mode.
@@ -40,6 +44,10 @@ node .\tools\semantic-kg.mjs drift   # writes .semantic-kg/drift-report.{json,md
 node .\tools\semantic-kg.mjs delta   # writes .semantic-kg/delta-report.{json,md}
 node .\tools\semantic-kg.mjs wiki    # writes .semantic-kg/wiki/
 node .\tools\semantic-kg.mjs viewer  # writes .semantic-kg/graph.html
+node .\tools\semantic-kg.mjs quality # writes .semantic-kg/quality.{json,md}
+node .\tools\semantic-kg.mjs obsidian # writes .semantic-kg/wiki/obsidian/
+node .\tools\semantic-kg.mjs ingest README.md docs
+node .\tools\semantic-kg.mjs enrich --provider local
 node .\tools\semantic-kg.mjs watch   # refreshes local graph artifacts as files change
 node .\tools\semantic-kg.mjs hook install
 node .\tools\semantic-kg.mjs mcp     # MCP stdio server for agent tools
@@ -70,6 +78,10 @@ node .\tools\semantic-kg.mjs baseline "architecture" "build deploy" "auth state"
     "kg:delta": "node tools/semantic-kg.mjs delta",
     "kg:wiki": "node tools/semantic-kg.mjs wiki",
     "kg:viewer": "node tools/semantic-kg.mjs viewer",
+    "kg:quality": "node tools/semantic-kg.mjs quality",
+    "kg:obsidian": "node tools/semantic-kg.mjs obsidian",
+    "kg:ingest": "node tools/semantic-kg.mjs ingest",
+    "kg:enrich": "node tools/semantic-kg.mjs enrich",
     "kg:watch": "node tools/semantic-kg.mjs watch",
     "kg:hook:install": "node tools/semantic-kg.mjs hook install",
     "kg:mcp": "node tools/semantic-kg.mjs mcp",
@@ -79,6 +91,33 @@ node .\tools\semantic-kg.mjs baseline "architecture" "build deploy" "auth state"
   }
 }
 ```
+
+## World-class graph workflow
+
+Use Graph-It as a local knowledge-graph product loop:
+
+```powershell
+node .\tools\semantic-kg.mjs build
+node .\tools\semantic-kg.mjs quality
+node .\tools\semantic-kg.mjs obsidian
+node .\tools\semantic-kg.mjs viewer
+```
+
+Outputs:
+
+- `.semantic-kg/quality.md` - graph health, issues, and next actions.
+- `.semantic-kg/wiki/obsidian/` - durable vault-style notes with tags and backlinks.
+- `.semantic-kg/graph.html` - searchable/filterable graph explorer with quality summary.
+- `.semantic-kg/enrichment-plan.json` - opt-in enrichment plan when `enrich` is run.
+
+For mixed documents:
+
+```powershell
+node .\tools\semantic-kg.mjs ingest README.md docs
+node .\tools\semantic-kg.mjs enrich --provider local
+```
+
+`enrich` is plan-only by default. It does not call a model or move data outside the repo.
 
 Add this to `.gitignore` in the target project:
 
