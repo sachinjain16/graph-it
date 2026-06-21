@@ -1187,8 +1187,9 @@ function viewerHtml(g) {
       parent.appendChild(el);
       return el;
     }
-    function layout(nodes, edges, width, height) {
-      const topicAngles = new Map(topics.map((t, i) => [t, (Math.PI * 2 * i) / Math.max(1, topics.length)]));
+     function layout(nodes, edges, width, height) {
+       if (nodes.length > 250) return ringLayout(nodes, width, height);
+       const topicAngles = new Map(topics.map((t, i) => [t, (Math.PI * 2 * i) / Math.max(1, topics.length)]));
       const state = new Map(nodes.map(n => {
         const topic = nodeTopic(n);
         const angle = topicAngles.get(topic) ?? ((hash(n.id) / 4294967295) * Math.PI * 2);
@@ -1230,8 +1231,39 @@ function viewerHtml(g) {
           p.vx *= .72; p.vy *= .72;
         }
       }
-      return state;
-    }
+       return state;
+     }
+     function ringLayout(nodes, width, height) {
+       const cx = width / 2;
+       const cy = height / 2;
+       const maxR = Math.max(80, Math.min(width, height) * 0.43);
+       const minR = Math.max(48, Math.min(width, height) * 0.12);
+       const ranked = rankedNodes(nodes);
+       const topicList = unique(ranked.map(nodeTopic));
+       const topicIndex = new Map(topicList.map((t, i) => [t, i]));
+       const buckets = new Map(topicList.map(t => [t, []]));
+       for (const n of ranked) buckets.get(nodeTopic(n)).push(n);
+       const positions = new Map();
+       for (const [topic, bucket] of buckets.entries()) {
+         const base = topicIndex.get(topic) || 0;
+         const topicStart = (Math.PI * 2 * base) / Math.max(1, topicList.length);
+         const topicEnd = (Math.PI * 2 * (base + 1)) / Math.max(1, topicList.length);
+         const span = Math.max(0.18, topicEnd - topicStart);
+         bucket.forEach((n, i) => {
+           const t = bucket.length <= 1 ? 0.5 : i / (bucket.length - 1);
+           const ring = i % 5;
+           const angle = topicStart + span * (0.12 + 0.76 * t);
+           const degreeBoost = Math.min(1, Math.log2((degrees.get(n.id) || 1) + 1) / 8);
+           const radius = minR + (maxR - minR) * (0.15 + 0.7 * ((ring + 1) / 5)) - degreeBoost * 38;
+           const jitter = ((hash(n.id) % 100) - 50) / 100 * 18;
+           positions.set(n.id, {
+             x: Math.max(34, Math.min(width - 34, cx + Math.cos(angle) * (radius + jitter))),
+             y: Math.max(34, Math.min(height - 34, cy + Math.sin(angle) * (radius + jitter))),
+           });
+         });
+       }
+       return positions;
+     }
     function showNode(n) {
       const related = graph.edges.filter(e => e.from === n.id || e.to === n.id).slice(0, 20);
       details.innerHTML = '<div class="kind">' + esc(n.kind) + '</div><h2>' + esc(n.label || n.id) + '</h2>' +
