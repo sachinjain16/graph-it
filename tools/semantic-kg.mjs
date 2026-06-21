@@ -1040,7 +1040,9 @@ function viewerHtml(g) {
      .quality-score { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
      .quality-score strong { color: var(--ok); font-size: 26px; }
      .quality ul { margin: 10px 0 0; padding-left: 18px; color: #cbd5e1; font-size: 12px; line-height: 1.45; }
-    .toolbar { position: absolute; left: 14px; top: 14px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 999px; background: rgba(2,6,23,.86); color: var(--muted); font-size: 12px; backdrop-filter: blur(10px); }
+     .toolbar { position: absolute; left: 14px; top: 14px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 999px; background: rgba(2,6,23,.86); color: var(--muted); font-size: 12px; backdrop-filter: blur(10px); }
+     .limit-row { display: grid; grid-template-columns: 1fr auto; gap: 8px; align-items: center; margin-top: 12px; }
+     select { padding: 8px 10px; border-radius: 10px; border: 1px solid var(--line); background: #020617; color: var(--text); }
     .legend { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
     .pill { display: inline-flex; align-items: center; gap: 6px; padding: 5px 8px; border-radius: 999px; background: var(--chip); color: #cbd5e1; font-size: 12px; }
     .dot { width: 9px; height: 9px; border-radius: 999px; background: var(--accent); }
@@ -1069,8 +1071,18 @@ function viewerHtml(g) {
   </header>
   <main>
     <aside>
-      <label for="search">Search nodes</label>
-      <input id="search" type="search" placeholder="symbol, file, topic, summary">
+       <label for="search">Search nodes</label>
+       <input id="search" type="search" placeholder="symbol, file, topic, summary">
+       <div class="limit-row">
+         <label for="renderLimit" style="margin:0">Render limit</label>
+         <select id="renderLimit">
+           <option value="250">Top 250</option>
+           <option value="500" selected>Top 500</option>
+           <option value="1000">Top 1000</option>
+           <option value="2000">Top 2000</option>
+           <option value="0">All nodes</option>
+         </select>
+       </div>
       <label>Node kinds</label>
       <div class="checks" id="kindFilters"></div>
       <label>Topics</label>
@@ -1106,7 +1118,8 @@ function viewerHtml(g) {
     }
     const colors = ["#38bdf8", "#a78bfa", "#34d399", "#fbbf24", "#fb7185", "#60a5fa", "#f472b6", "#2dd4bf", "#c084fc", "#f97316"];
     const svg = document.getElementById("graph");
-    const search = document.getElementById("search");
+     const search = document.getElementById("search");
+     const renderLimit = document.getElementById("renderLimit");
     const kindFilters = document.getElementById("kindFilters");
     const topicFilters = document.getElementById("topicFilters");
     const evidenceFilters = document.getElementById("evidenceFilters");
@@ -1185,10 +1198,13 @@ function viewerHtml(g) {
       }));
       const visibleIds = new Set(nodes.map(n => n.id));
       const visibleEdges = edges.filter(e => visibleIds.has(e.from) && visibleIds.has(e.to));
-      for (let step = 0; step < 90; step++) {
+      const steps = nodes.length > 1200 ? 18 : nodes.length > 700 ? 28 : nodes.length > 350 ? 45 : 90;
+      const repulsionWindow = nodes.length > 900 ? 180 : nodes.length > 500 ? 260 : nodes.length;
+      for (let step = 0; step < steps; step++) {
         for (let i = 0; i < nodes.length; i++) {
           const a = state.get(nodes[i].id);
-          for (let j = i + 1; j < nodes.length; j++) {
+          const maxJ = Math.min(nodes.length, i + repulsionWindow);
+          for (let j = i + 1; j < maxJ; j++) {
             const b = state.get(nodes[j].id);
             const dx = a.x - b.x || .01, dy = a.y - b.y || .01;
             const d2 = Math.max(80, dx * dx + dy * dy);
@@ -1226,19 +1242,31 @@ function viewerHtml(g) {
           return '<div class="edge-card"><b>' + esc(e.type) + '</b> · ' + esc(e.evidence || "") + '<br>' + esc(other ? (other.kind + ":" + (other.label || other.id)) : "Missing node") + (e.why ? '<br><span>' + esc(e.why) + '</span>' : '') + '</div>';
         }).join("") : '<p class="empty">No relationships found.</p>') + '</div>';
     }
-    function render() {
-      const q = search.value.trim().toLowerCase();
-      const kindSet = selected("kind"), topicSet = selected("topic"), evidenceSet = selected("evidence");
-      const visibleNodes = graph.nodes.filter(n => kindSet.has(n.kind) && nodeTopics(n).some(t => topicSet.has(t)) && (!q || haystack(n).includes(q)));
-      const visibleIds = new Set(visibleNodes.map(n => n.id));
-      const visibleEdges = graph.edges.filter(e => visibleIds.has(e.from) && visibleIds.has(e.to) && evidenceSet.has(e.evidence || "UNSPECIFIED"));
-      document.getElementById("nodeCount").textContent = visibleNodes.length;
-      document.getElementById("edgeCount").textContent = visibleEdges.length;
+     function rankedNodes(nodes) {
+       return nodes.slice().sort((a, b) => {
+         const da = degrees.get(a.id) || 0;
+         const db = degrees.get(b.id) || 0;
+         if (db !== da) return db - da;
+         if (a.kind === "topic" && b.kind !== "topic") return -1;
+         if (b.kind === "topic" && a.kind !== "topic") return 1;
+         return String(a.label || a.id).localeCompare(String(b.label || b.id));
+       });
+     }
+     function render() {
+       const q = search.value.trim().toLowerCase();
+       const kindSet = selected("kind"), topicSet = selected("topic"), evidenceSet = selected("evidence");
+       const matchedNodes = graph.nodes.filter(n => kindSet.has(n.kind) && nodeTopics(n).some(t => topicSet.has(t)) && (!q || haystack(n).includes(q)));
+       const limit = Number(renderLimit.value || 500);
+       const visibleNodes = limit > 0 ? rankedNodes(matchedNodes).slice(0, limit) : matchedNodes;
+       const visibleIds = new Set(visibleNodes.map(n => n.id));
+       const visibleEdges = graph.edges.filter(e => visibleIds.has(e.from) && visibleIds.has(e.to) && evidenceSet.has(e.evidence || "UNSPECIFIED"));
+       document.getElementById("nodeCount").textContent = visibleNodes.length + (visibleNodes.length < matchedNodes.length ? " / " + matchedNodes.length : "");
+       document.getElementById("edgeCount").textContent = visibleEdges.length;
       svg.replaceChildren();
       const box = svg.getBoundingClientRect();
       const width = Math.max(700, box.width || 1000), height = Math.max(500, box.height || 700);
       svg.setAttribute("viewBox", "0 0 " + width + " " + height);
-      const positions = layout(visibleNodes, visibleEdges, width, height);
+       const positions = layout(visibleNodes, visibleEdges, width, height);
       const edgeGroup = addSvg("g", {});
       const nodeGroup = addSvg("g", {});
       for (const e of visibleEdges) {
@@ -1257,7 +1285,8 @@ function viewerHtml(g) {
         group.appendChild(document.createElementNS("http://www.w3.org/2000/svg", "title")).textContent = n.kind + ":" + (n.label || n.id);
       }
     }
-    document.querySelectorAll("input").forEach(input => input.addEventListener("input", render));
+     document.querySelectorAll("input, select").forEach(input => input.addEventListener("input", render));
+     document.querySelectorAll("select").forEach(input => input.addEventListener("change", render));
     window.addEventListener("resize", render);
     render();
   </script>
