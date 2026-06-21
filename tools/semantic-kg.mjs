@@ -484,6 +484,7 @@ function computeQuality(g) {
   if (weakEdges.length) recommendations.push(`Review ${weakEdges.length} low-confidence inferred edge(s).`);
   if (duplicateLabels.length) recommendations.push(`Disambiguate ${duplicateLabels.length} duplicate label group(s).`);
   if (!recommendations.length) recommendations.push("Graph structure looks healthy. Keep indexing after meaningful changes.");
+  const repairPlan = buildRepairPlan({ orphanNodes, godNodes, weakEdges, duplicateLabels, g });
   return {
     generatedAt: new Date().toISOString(),
     score,
@@ -503,6 +504,7 @@ function computeQuality(g) {
     weakEdges: weakEdges.slice(0, 50).map(e => edgeSummary(e, new Map(g.nodes.map(n => [n.id, n])))),
     duplicateLabels: duplicateLabels.slice(0, 50),
     recommendations,
+    repairPlan,
     nextIndexingActions: [
       "Run `node tools/semantic-kg.mjs obsidian` for durable vault-style notes.",
       "Run `node tools/semantic-kg.mjs viewer` after quality changes.",
@@ -510,8 +512,61 @@ function computeQuality(g) {
     ],
   };
 }
+function buildRepairPlan({ orphanNodes, godNodes, weakEdges, duplicateLabels, g }) {
+  const weakByType = [...weakEdges.reduce((map, edge) => map.set(edge.type, (map.get(edge.type) || 0) + 1), new Map()).entries()]
+    .sort((a, b) => b[1] - a[1]);
+  const plan = [];
+  if (weakEdges.length) {
+    plan.push({
+      priority: "P0",
+      area: "weak-inferred-edges",
+      issue: `${weakEdges.length} low-confidence inferred relationship(s) are reducing score.`,
+      action: weakByType.length
+        ? `Tighten or reclassify the top weak edge types: ${weakByType.slice(0, 5).map(([type, count]) => `${type} (${count})`).join(", ")}.`
+        : "Review weak inferred relationships and either raise confidence with better evidence or demote noisy edges.",
+      command: "node tools/semantic-kg.mjs quality",
+    });
+  }
+  if (orphanNodes.length) {
+    plan.push({
+      priority: "P1",
+      area: "orphan-nodes",
+      issue: `${orphanNodes.length} node(s) have no relationships.`,
+      action: "Add stronger section/file/topic extraction or exclude low-value generated/source artifacts that should not become nodes.",
+      command: "node tools/semantic-kg.mjs query --intent=all \"orphan\"",
+    });
+  }
+  if (godNodes.length) {
+    plan.push({
+      priority: "P1",
+      area: "god-nodes",
+      issue: `${godNodes.length} over-connected node(s) may dominate the graph.`,
+      action: "Split broad topics, cap noisy semantic links, or add relationship-type filters for high-degree nodes.",
+      command: "node tools/semantic-kg.mjs viewer",
+    });
+  }
+  if (duplicateLabels.length) {
+    plan.push({
+      priority: "P2",
+      area: "duplicate-labels",
+      issue: `${duplicateLabels.length} duplicate label group(s) can make search/detail panels ambiguous.`,
+      action: "Use path-aware labels for symbols/sections with repeated names.",
+      command: "node tools/semantic-kg.mjs obsidian",
+    });
+  }
+  if (!plan.length) {
+    plan.push({
+      priority: "P0",
+      area: "healthy",
+      issue: "No structural blocker found.",
+      action: "Keep Graph-It fresh with watch or hook mode after meaningful changes.",
+      command: "node tools/semantic-kg.mjs hook install",
+    });
+  }
+  return plan;
+}
 function renderQualityMarkdown(q) {
-  return `# Graph-It Quality\n\nGenerated: ${q.generatedAt}\n\nScore: **${q.score}/100** (${q.grade})\n\n## Metrics\n\n| Metric | Value |\n|---|---:|\n| Connectivity | ${q.metrics.connectivity} |\n| Source coverage | ${q.metrics.sourceCoverage} |\n| Orphan nodes | ${q.metrics.orphanCount} |\n| Weak inferred edges | ${q.metrics.weakEdgeCount} |\n| Duplicate label groups | ${q.metrics.duplicateLabelGroups} |\n| God-node candidates | ${q.metrics.godNodeCount} |\n| Max degree | ${q.metrics.maxDegree} |\n\n## Recommendations\n\n${q.recommendations.map(x => `- ${md(x)}`).join("\n")}\n\n## God-node candidates\n\n${q.godNodes.length ? q.godNodes.map(n => `- ${md(n.label || n.id)} (${n.kind}, degree ${n.degree})`).join("\n") : "- None"}\n\n## Orphan nodes\n\n${q.orphanNodes.length ? q.orphanNodes.slice(0, 25).map(n => `- ${md(n.label || n.id)} (${n.kind})`).join("\n") : "- None"}\n`;
+  return `# Graph-It Quality\n\nGenerated: ${q.generatedAt}\n\nScore: **${q.score}/100** (${q.grade})\n\n## Metrics\n\n| Metric | Value |\n|---|---:|\n| Connectivity | ${q.metrics.connectivity} |\n| Source coverage | ${q.metrics.sourceCoverage} |\n| Orphan nodes | ${q.metrics.orphanCount} |\n| Weak inferred edges | ${q.metrics.weakEdgeCount} |\n| Duplicate label groups | ${q.metrics.duplicateLabelGroups} |\n| God-node candidates | ${q.metrics.godNodeCount} |\n| Max degree | ${q.metrics.maxDegree} |\n\n## Recommendations\n\n${q.recommendations.map(x => `- ${md(x)}`).join("\n")}\n\n## Repair plan\n\n${q.repairPlan.map(item => `- **${item.priority} ${item.area}**: ${md(item.issue)} ${md(item.action)} Command: \`${item.command}\``).join("\n")}\n\n## God-node candidates\n\n${q.godNodes.length ? q.godNodes.map(n => `- ${md(n.label || n.id)} (${n.kind}, degree ${n.degree})`).join("\n") : "- None"}\n\n## Orphan nodes\n\n${q.orphanNodes.length ? q.orphanNodes.slice(0, 25).map(n => `- ${md(n.label || n.id)} (${n.kind})`).join("\n") : "- None"}\n`;
 }
 function quality() {
   const q = computeQuality(load());
