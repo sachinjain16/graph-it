@@ -8,10 +8,11 @@ Use Graph-It when the user wants a reusable local semantic knowledge graph for a
 Core principles:
 1. Local-first by default. Do not send code, docs, screenshots, PDFs, or other project content to external services unless the user explicitly asks for an LLM/vision enrichment pass and confirms privacy implications.
 2. Evidence honesty. Every edge must carry an evidence marker: EXTRACTED for deterministic facts, INFERRED for heuristic/semantic relationships, AMBIGUOUS when uncertain.
-3. Cheap before expensive. Build deterministic structure first: files, hashes, symbols, sections, headings, mentions, references, archive/media metadata. Add semantic summaries and topic edges locally using names, surrounding text, headings, and configured topic vocabularies.
-4. Project-specific topic maps. Infer sensible default topics from the project, then allow a topic vocabulary to be customized for that domain. For LHQ+, examples are AI content generation, BYOK cost governance, Reading, Daily Pack, Parent controls, Curriculum standards, Little Wonders, Docs/architecture, Build/deploy, Media assets, Phase history, and Browser persistence.
-5. Avoid generated-noise by default. Exclude build outputs, dependency folders, cache folders, lockfile noise, and generated docs unless the user wants generated artifacts indexed too.
-6. Baseline usefulness. After building, run a small benchmark that compares graph query output size/time against the raw files that would otherwise be opened. Report reduction as a byte/context proxy and save a baseline artifact.
+3. Enterprise-first posture. Prefer predictable repo-local setup, ignored generated artifacts, explicit trust boundaries, and MCP-native agent access over broad feature sprawl.
+4. Cheap before expensive. Build deterministic structure first: files, hashes, symbols, sections, headings, mentions, references, archive/media metadata. Add semantic summaries and topic edges locally using names, surrounding text, headings, and configured topic vocabularies.
+5. Project-specific topic maps. Infer sensible default topics from the project, then allow a topic vocabulary to be customized for that domain. Examples include architecture, build/deploy, security/privacy, user interface, documentation, data persistence, media assets, and project history.
+6. Avoid generated-noise by default. Exclude build outputs, dependency folders, cache folders, lockfile noise, and generated docs unless the user wants generated artifacts indexed too.
+7. Baseline usefulness. After building, run a small benchmark that compares graph query output size/time against the raw files that would otherwise be opened. Report reduction as a byte/context proxy and save a baseline artifact.
 
 Bundled resource:
 - This skill includes `semantic-kg-template.mjs`, a dependency-free Node.js starting point. When available, copy it into the target project as `tools/semantic-kg.mjs`, then customize `SEMANTIC_TOPICS`, exclusions, summaries, and domain-specific inferred edge types.
@@ -30,8 +31,15 @@ Preferred implementation shape:
   - `kg:delta` for changed files, semantic neighborhood movement, new inferred edges, isolated nodes, and recommended rereads
   - `kg:wiki` for agent-readable markdown pages under `.semantic-kg/wiki/`, including topic pages and a community report
   - `kg:viewer` for a standalone local `.semantic-kg/graph.html` viewer with search, filters, and node details
+  - `kg:quality` for graph health score, coverage, noise, and repair actions
+  - `kg:export` for GraphML, Cypher/Neo4j, and SVG local exports
+  - `kg:proof` for local proof packs with quality, query results, and context-reduction proxies
+  - `kg:examples` for sanitized worked-example scaffolds that still require human review
+  - `kg:agent-rules` for query-first instruction packs for common agent clients
+  - `kg:enrich` for creating a privacy-safe local enrichment plan and optional local text sidecars without external calls
   - `kg:watch` for refreshing graph/wiki/viewer artifacts during active editing
   - `kg:hook:install` for installing a managed post-commit hook that refreshes local graph artifacts
+  - `kg:bootstrap` for installing Graph-It into another repo with safe local defaults
   - `kg:mcp` for exposing graph query/path/stats/node/neighborhood/build over MCP stdio
   - `kg:mcp:config` for generating local MCP client snippets and optional graph.stats/graph.delta smoke checks
   - optional `kg:path "A" "B"`
@@ -49,25 +57,30 @@ Minimum graph schema:
 Workflow:
 1. Inspect the project root and identify source files, docs, media, archives, generated folders, and dependency folders.
 2. Decide exclusion rules before building. Exclude dependencies and generated artifacts unless requested.
-3. Create or adapt a local indexer. Prefer a single portable script with no required external dependencies.
-4. Build the graph and run `stats`.
-5. Run 3-5 representative query tests based on likely agent tasks, including at least one `--intent=code` exact-symbol lookup and one `--intent=docs` lookup.
-6. Run `impact` for one important component/symbol to verify code/docs touchpoints are useful.
-7. Run `drift` when the project has narrative docs or release notes that should stay aligned with shipped work. Check the console output and saved drift report artifacts.
-8. Compare query output KB against canonical raw files referenced by the query. Save the results to `.semantic-kg/baseline.json` or the project-specific graph folder.
-9. Tighten noisy topic aliases and query scoring if broad words dominate results.
-10. Document the workflow and graph stats.
-11. Save a user/project memory when appropriate so future sessions use the graph first.
+3. For reusable repo setup, prefer `node tools/semantic-kg.mjs bootstrap <target>` from the canonical Graph-It repo instead of manual copy/paste.
+4. Create or adapt a local indexer. Prefer a single portable script with no required external dependencies.
+5. Build the graph and run `stats`.
+6. Run `quality` and review `.semantic-kg/quality.md` before relying on the graph.
+7. Run 3-5 representative query tests based on likely agent tasks, including at least one `--intent=code` exact-symbol lookup and one `--intent=docs` lookup.
+8. Run `proof` with representative queries to capture quality, top hits, and context-reduction evidence.
+9. Run `impact` for one important component/symbol to verify code/docs touchpoints are useful.
+10. Run `drift` when the project has narrative docs or release notes that should stay aligned with shipped work. Check the console output and saved drift report artifacts.
+11. Run `export all` when downstream graph tools need GraphML, Cypher, or SVG.
+12. Run `agent-rules all` when the target repo should carry query-first instructions for common agent clients.
+13. Run `examples --public` only for non-confidential or already-reviewed projects, then review before publishing.
+14. Compare query output KB against canonical raw files referenced by the query. Save the results to `.semantic-kg/baseline.json` or the project-specific graph folder.
+15. Tighten noisy topic aliases and query scoring if broad words dominate results.
+16. Document the workflow and graph stats.
+17. Save a user/project memory when appropriate so future sessions use the graph first.
 
 For colleagues or reusable delivery:
 - Present it as a local project tool plus a Clawpilot skill workflow.
 - Make it privacy-safe: no external content upload by default.
 - Make it easy to extend by editing a `SEMANTIC_TOPICS` array or config object.
 - Explain that deterministic extraction is not the same as full LLM understanding, but often provides 50x-300x less context for navigation tasks.
-- Prefer current Graph-It behavior when creating or updating templates: intent-aware ranking, exact-symbol prioritization, next-read line bundles, impact mode, drift report artifacts, delta reports, agent wiki export, community reporting, watch/hook refresh, MCP server mode, MCP config helper, and baseline artifacts.
+- Prefer current Graph-It behavior when creating or updating templates: enterprise bootstrap/install, package CLI aliases, trust docs, JS/TS structural extraction, intent-aware ranking, exact-symbol prioritization, next-read line bundles, impact mode, drift report artifacts, delta reports, quality score, export pack, proof pack, local extraction sidecars, sanitized examples, agent-rule packs, agent wiki export, community reporting, watch/hook refresh, MCP server mode, MCP config helper, and baseline artifacts.
 
-When operating in LHQ+ specifically:
-- Work in `C:\dev\.liqplus-deploy`.
-- Use the existing tool `tools\lhq-kg.mjs` and output `.lhq-kg\graph.json`.
-- Preserve the deploy rule: never run `npm run deploy` or `npm run deploy:preview`.
-- Run `npm run kg:build`, `npm run kg:stats`, representative `npm run kg:query -- --intent=code "..."`, `npm run kg:impact -- "..."`, and `npm run kg:drift` before claiming the graph is useful.
+When operating in a project that already has a custom graph tool:
+- Preserve that project's existing graph tool and output directory unless the user asks to migrate it.
+- Preserve any project-specific deploy or release safety rules.
+- Run the project's existing build, stats, representative query, impact, drift, quality, and proof commands before claiming the graph is useful.

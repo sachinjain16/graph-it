@@ -1,4 +1,5 @@
 node_modules/
 .semantic-kg/
+.graph-it/
 *.log
 .DS_Store

@@ -1,27 +1,105 @@
-# Installation
+# Install Graph-It
 
-## Use as a project-local tool
+Graph-It can be used three ways:
 
-Copy the template into any repo:
+1. **Source checkout**: run `node tools/semantic-kg.mjs ...` from this repo.
+2. **Package CLI**: run `graph-it ...` after installing from a package or tarball.
+3. **Repo-local bootstrap**: copy the portable runtime into any target repo with safe defaults.
 
-```powershell
-New-Item -ItemType Directory -Force C:\path\to\project\tools
-Copy-Item .\tools\semantic-kg.mjs C:\path\to\project\tools\semantic-kg.mjs
-Set-Location C:\path\to\project
-node .\tools\semantic-kg.mjs build
-node .\tools\semantic-kg.mjs query --intent=code "MyComponent"
-node .\tools\semantic-kg.mjs impact "MyComponent"
-node .\tools\semantic-kg.mjs drift   # writes .semantic-kg\drift-report.json and .md
-```
+## Prerequisites
 
-## Use as a Clawpilot skill
+- Node.js 20+
+- Git when using hook installation
+- An MCP-capable or instruction-file-capable AI coding agent for agent integration
 
-Copy the `skill` folder contents into your local Clawpilot skills directory under a folder named `graph-it`.
+No external services, model keys, database servers, or native dependencies are required for the default runtime.
+
+## Validate this repo
 
 ```powershell
-New-Item -ItemType Directory -Force "$env:USERPROFILE\.copilot\m-skills\graph-it"
-Copy-Item .\skill\SKILL.md "$env:USERPROFILE\.copilot\m-skills\graph-it\SKILL.md" -Force
-Copy-Item .\tools\semantic-kg.mjs "$env:USERPROFILE\.copilot\m-skills\graph-it\semantic-kg-template.mjs" -Force
+npm run check
+npm test
+npm run kg:build
+npm run kg:quality
+npm run kg:mcp:config -- --smoke-test
 ```
 
-Restart or refresh Clawpilot skill discovery if needed.
+## Bootstrap a target repo
+
+From the Graph-It source repo:
+
+```powershell
+node .\tools\semantic-kg.mjs bootstrap ..\target-project --build
+```
+
+From an installed/package CLI:
+
+```powershell
+graph-it install --project ..\target-project --build
+```
+
+Bootstrap does the following:
+
+- installs `tools\semantic-kg.mjs`
+- adds `.semantic-kg/` to `.gitignore`
+- adds npm `kg:*` scripts when `package.json` exists
+- optionally runs `build` with `--build`
+- optionally installs a managed post-commit hook with `--with-hook`
+- avoids replacing an existing different Graph-It runtime unless `--force` is passed
+
+## Configure AI coding agents
+
+From the target repo:
+
+```powershell
+npm run kg:agent-rules -- all
+npm run kg:mcp:config -- --smoke-test
+```
+
+Use the generated outputs as appropriate:
+
+| Output | Use |
+|---|---|
+| `.graph-it\agent-rules\generic-graph-it.md` | Generic AGENTS.md-style guidance. |
+| `.graph-it\agent-rules\copilot-graph-it.md` | GitHub Copilot CLI guidance. |
+| `.graph-it\agent-rules\claude-graph-it.md` | Claude Code guidance. |
+| `.graph-it\agent-rules\cursor-graph-it.mdc` | Cursor rule content. |
+| `.graph-it\agent-rules\codex-graph-it.md` | Codex-style agent guidance. |
+| `kg:mcp:config` output | MCP server snippets for MCP-aware clients. |
+
+Review generated agent rules before copying them into client-specific instruction locations.
+
+## Recommended local workflow
+
+```powershell
+npm run kg:build
+npm run kg:quality
+npm run kg:proof -- "architecture" "security privacy" "install"
+npm run kg:query -- --intent=code "TargetSymbol"
+npm run kg:delta
+```
+
+Optional expansion commands:
+
+```powershell
+npm run kg:export -- all
+npm run kg:enrich -- --provider local --extract-text
+npm run kg:examples -- --name target-project --public
+```
+
+Generated artifacts are local operational data. Review before publishing or sharing.
+
+## Package smoke check
+
+Before publishing a package:
+
+```powershell
+npm pack --dry-run
+```
+
+The package exposes two CLI names:
+
+- `graph-it`
+- `semantic-kg`
+
+Both execute the same runtime.

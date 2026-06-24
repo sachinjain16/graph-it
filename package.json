@@ -2,11 +2,21 @@
   "name": "graph-it",
   "version": "0.1.0",
   "private": false,
-  "description": "Graph-It (semantic-graph-indexer): local-first semantic knowledge graph indexing for codebases and mixed project folders.",
+  "description": "Enterprise-first local semantic knowledge graph tooling for coding agents and project workspaces.",
   "type": "module",
   "bin": {
+    "graph-it": "tools/semantic-kg.mjs",
     "semantic-kg": "tools/semantic-kg.mjs"
   },
+  "files": [
+    "tools/semantic-kg.mjs",
+    "skill/SKILL.md",
+    "README.md",
+    "INSTALL.md",
+    "ARCHITECTURE.md",
+    "SECURITY.md",
+    "SEMANTIC_GRAPH_ROADMAP.md"
+  ],
   "scripts": {
     "kg:build": "node tools/semantic-kg.mjs build",
     "kg:stats": "node tools/semantic-kg.mjs stats",
@@ -18,16 +28,23 @@
     "kg:wiki": "node tools/semantic-kg.mjs wiki",
     "kg:viewer": "node tools/semantic-kg.mjs viewer",
     "kg:quality": "node tools/semantic-kg.mjs quality",
+    "kg:export": "node tools/semantic-kg.mjs export",
+    "kg:proof": "node tools/semantic-kg.mjs proof",
+    "kg:examples": "node tools/semantic-kg.mjs examples",
+    "kg:agent-rules": "node tools/semantic-kg.mjs agent-rules",
     "kg:obsidian": "node tools/semantic-kg.mjs obsidian",
     "kg:ingest": "node tools/semantic-kg.mjs ingest",
     "kg:enrich": "node tools/semantic-kg.mjs enrich",
     "kg:watch": "node tools/semantic-kg.mjs watch",
     "kg:hook:install": "node tools/semantic-kg.mjs hook install",
+    "kg:bootstrap": "node tools/semantic-kg.mjs bootstrap",
+    "kg:install": "node tools/semantic-kg.mjs install",
     "kg:mcp": "node tools/semantic-kg.mjs mcp",
     "kg:mcp:config": "node tools/semantic-kg.mjs mcp-config",
     "kg:path": "node tools/semantic-kg.mjs path",
     "kg:baseline": "node tools/semantic-kg.mjs baseline",
-    "check": "node --check tools/semantic-kg.mjs"
+    "check": "node --check tools/semantic-kg.mjs",
+    "test": "node tests/smoke.mjs"
   },
   "keywords": [
     "knowledge-graph",

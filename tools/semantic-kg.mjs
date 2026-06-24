@@ -4,6 +4,8 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { spawnSync } from "node:child_process";
+import zlib from "node:zlib";
 
 const ROOT = process.cwd();
 const OUT_DIR = path.join(ROOT, ".semantic-kg");
@@ -15,12 +17,18 @@ const QUALITY_JSON = path.join(OUT_DIR, "quality.json");
 const QUALITY_MD = path.join(OUT_DIR, "quality.md");
 const CACHE_DIR = path.join(OUT_DIR, "cache");
 const WIKI_DIR = path.join(OUT_DIR, "wiki");
+const EXPORT_DIR = path.join(OUT_DIR, "exports");
+const PROOF_DIR = path.join(OUT_DIR, "proof");
+const ENRICH_DIR = path.join(OUT_DIR, "enrichment");
+const EXAMPLES_DIR = path.join(ROOT, "worked");
+const AGENT_RULES_DIR = path.join(ROOT, ".graph-it", "agent-rules");
 const VIEWER_PATH = path.join(OUT_DIR, "graph.html");
 const POST_COMMIT_HOOK = path.join(ROOT, ".git", "hooks", "post-commit");
 const TOOL_PATH = path.join(ROOT, "tools", "semantic-kg.mjs");
+const TOOL_SOURCE_PATH = path.resolve(process.argv[1] || TOOL_PATH);
 const INCLUDE_GENERATED = process.argv.includes("--include-generated");
 
-const EXCLUDED_DIRS = new Set([".git", ".semantic-kg", "node_modules", ".next", "dist", "coverage", ".cache", ".turbo"]);
+const EXCLUDED_DIRS = new Set([".git", ".semantic-kg", ".graph-it", "node_modules", ".next", "dist", "coverage", ".cache", ".turbo"]);
 const GENERATED_DIRS = new Set(["build", "dist", "out", "target", "coverage"]);
 const TEXT_EXTS = new Set([".md", ".txt", ".rst", ".html", ".js", ".jsx", ".ts", ".tsx", ".css", ".json", ".mjs", ".cjs", ".py", ".go", ".rs", ".java", ".cs"]);
 const CODE_EXTS = new Set([".html", ".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs", ".py", ".go", ".rs", ".java", ".cs"]);
@@ -42,6 +50,33 @@ const SEMANTIC_TOPICS = [
 ];
 
 const STOP = new Set(["the", "and", "for", "with", "this", "that", "from", "into", "your", "you", "are", "was", "were", "has", "have", "function", "const", "return", "class", "true", "false", "null", "undefined"]);
+const PACKAGE_SCRIPTS = {
+  "kg:build": "node tools/semantic-kg.mjs build",
+  "kg:stats": "node tools/semantic-kg.mjs stats",
+  "kg:query": "node tools/semantic-kg.mjs query",
+  "kg:impact": "node tools/semantic-kg.mjs impact",
+  "kg:drift": "node tools/semantic-kg.mjs drift",
+  "kg:drift:report": "node tools/semantic-kg.mjs drift",
+  "kg:delta": "node tools/semantic-kg.mjs delta",
+  "kg:wiki": "node tools/semantic-kg.mjs wiki",
+  "kg:viewer": "node tools/semantic-kg.mjs viewer",
+  "kg:quality": "node tools/semantic-kg.mjs quality",
+  "kg:export": "node tools/semantic-kg.mjs export",
+  "kg:proof": "node tools/semantic-kg.mjs proof",
+  "kg:examples": "node tools/semantic-kg.mjs examples",
+  "kg:agent-rules": "node tools/semantic-kg.mjs agent-rules",
+  "kg:obsidian": "node tools/semantic-kg.mjs obsidian",
+  "kg:ingest": "node tools/semantic-kg.mjs ingest",
+  "kg:enrich": "node tools/semantic-kg.mjs enrich",
+  "kg:watch": "node tools/semantic-kg.mjs watch",
+  "kg:hook:install": "node tools/semantic-kg.mjs hook install",
+  "kg:bootstrap": "node tools/semantic-kg.mjs bootstrap",
+  "kg:install": "node tools/semantic-kg.mjs install",
+  "kg:mcp": "node tools/semantic-kg.mjs mcp",
+  "kg:mcp:config": "node tools/semantic-kg.mjs mcp-config",
+  "kg:path": "node tools/semantic-kg.mjs path",
+  "kg:baseline": "node tools/semantic-kg.mjs baseline",
+};
 
 function usage() {
   console.log(`Semantic KG
@@ -56,11 +91,17 @@ Usage:
   node tools/semantic-kg.mjs wiki
   node tools/semantic-kg.mjs viewer
   node tools/semantic-kg.mjs quality
+  node tools/semantic-kg.mjs export [all|graphml|cypher|svg]
+  node tools/semantic-kg.mjs proof ["query one" "query two"]
+  node tools/semantic-kg.mjs examples [--name slug] [--public]
+  node tools/semantic-kg.mjs agent-rules [all|generic|copilot|claude|cursor|codex]
   node tools/semantic-kg.mjs obsidian
   node tools/semantic-kg.mjs ingest <file-or-folder> [...]
-  node tools/semantic-kg.mjs enrich [--provider local]
+  node tools/semantic-kg.mjs enrich [--provider local] [--extract-text] [--limit=50]
   node tools/semantic-kg.mjs watch
   node tools/semantic-kg.mjs hook install
+  node tools/semantic-kg.mjs bootstrap [target-dir] [--with-hook] [--build] [--force]
+  node tools/semantic-kg.mjs install [--project target-dir] [--with-hook] [--build] [--force]
   node tools/semantic-kg.mjs mcp
   node tools/semantic-kg.mjs mcp-config [--client=all|generic|claude-desktop|clawpilot] [--smoke-test]
   node tools/semantic-kg.mjs path "A" "B"
@@ -74,6 +115,9 @@ function tokenize(text) { return [...new Set(String(text).toLowerCase().match(/[
 function escapeRx(s) { return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"); }
 function slug(s) { return String(s || "untitled").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 80) || "untitled"; }
 function md(s) { return String(s ?? "").replace(/\|/g, "\\|").replace(/\r?\n/g, " ").trim(); }
+function xml(s) { return String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;"); }
+function cypherString(s) { return JSON.stringify(String(s ?? "")); }
+function safeCypherId(id) { return `n${sha(Buffer.from(String(id))).slice(0, 12)}`; }
 function fileId(p) { return `file:${p}`; }
 function symbolId(p, name) { return `symbol:${p}:${name}`; }
 function sectionId(p, line, title) { return `section:${p}:${line}:${title.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 80)}`; }
@@ -158,6 +202,27 @@ function indexText(g, p, text) {
     const summary = summarizeSymbol(s.name, body, p);
     addNode(g, { id, kind: /^[A-Z]/.test(s.name) ? "component" : "symbol", label: s.name, path: p, line: s.line, summary, semanticTags: matchedTopics(`${s.name} ${body}`).map(t => t.label), tokens: tokenize(`${words(s.name)} ${summary}`) });
     addEdge(g, fid, id, "DEFINES", { evidence: "EXTRACTED" });
+  }
+  const ext = path.extname(p).toLowerCase();
+  if ([".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs"].includes(ext)) {
+    const depSeen = new Set();
+    const addDependency = (spec, index, edgeType = "IMPORTS") => {
+      const clean = String(spec || "").trim();
+      if (!clean || depSeen.has(`${edgeType}:${clean}`)) return;
+      depSeen.add(`${edgeType}:${clean}`);
+      const id = `${fid}#dep:${slug(`${edgeType}-${clean}`)}`;
+      addNode(g, { id, kind: "dependency", label: clean, path: p, line: lineAt(text, index), summary: `${edgeType === "REQUIRES" ? "Requires" : "Imports"} ${clean}.`, semanticTags: ["dependency"], tokens: tokenize(clean) });
+      addEdge(g, fid, id, edgeType, { evidence: "EXTRACTED" });
+    };
+    for (const m of text.matchAll(/import\s+(?:type\s+)?(?:(?:[\w*{}\s,$]+)\s+from\s+)?["']([^"']+)["']/g)) addDependency(m[1], m.index, "IMPORTS");
+    for (const m of text.matchAll(/export\s+[^;\n]*\s+from\s+["']([^"']+)["']/g)) addDependency(m[1], m.index, "EXPORTS_FROM");
+    for (const m of text.matchAll(/require\(\s*["']([^"']+)["']\s*\)/g)) addDependency(m[1], m.index, "REQUIRES");
+    for (const m of text.matchAll(/export\s+(?:default\s+)?(?:async\s+)?(?:function|class|const|let|var|interface|type)\s+([A-Za-z_$][\w$]*)/g)) {
+      const id = `${fid}#export:${m[1]}`;
+      addNode(g, { id, kind: "export", label: m[1], path: p, line: lineAt(text, m.index), summary: `Exports ${m[1]}.`, semanticTags: ["export"], tokens: tokenize(m[1]) });
+      addEdge(g, fid, id, "EXPORTS", { evidence: "EXTRACTED" });
+      addEdge(g, id, symbolId(p, m[1]), "REFERENCES", { evidence: "EXTRACTED" });
+    }
   }
   const names = [...new Set(unique.map(s => s.name))].filter(n => n.length >= 4).slice(0, 1500);
   for (let i = 0; i < unique.length; i++) {
@@ -579,6 +644,235 @@ function quality() {
   console.log(`Wrote ${path.relative(ROOT, QUALITY_MD)}`);
 }
 
+function graphml(g) {
+  const lines = [
+    '<?xml version="1.0" encoding="UTF-8"?>',
+    '<graphml xmlns="http://graphml.graphdrawing.org/xmlns">',
+    '  <key id="label" for="node" attr.name="label" attr.type="string"/>',
+    '  <key id="kind" for="node" attr.name="kind" attr.type="string"/>',
+    '  <key id="path" for="node" attr.name="path" attr.type="string"/>',
+    '  <key id="type" for="edge" attr.name="type" attr.type="string"/>',
+    '  <key id="evidence" for="edge" attr.name="evidence" attr.type="string"/>',
+    '  <key id="confidence" for="edge" attr.name="confidence" attr.type="double"/>',
+    '  <graph id="GraphIt" edgedefault="directed">',
+  ];
+  for (const n of g.nodes) {
+    lines.push(`    <node id="${xml(n.id)}">`);
+    lines.push(`      <data key="label">${xml(n.label || n.id)}</data>`);
+    lines.push(`      <data key="kind">${xml(n.kind || "")}</data>`);
+    if (n.path) lines.push(`      <data key="path">${xml(n.path)}</data>`);
+    lines.push("    </node>");
+  }
+  g.edges.forEach((e, i) => {
+    lines.push(`    <edge id="e${i}" source="${xml(e.from)}" target="${xml(e.to)}">`);
+    lines.push(`      <data key="type">${xml(e.type || "")}</data>`);
+    lines.push(`      <data key="evidence">${xml(e.evidence || "")}</data>`);
+    if (e.confidence !== undefined) lines.push(`      <data key="confidence">${Number(e.confidence) || 0}</data>`);
+    lines.push("    </edge>");
+  });
+  lines.push("  </graph>", "</graphml>");
+  return lines.join("\n");
+}
+function cypher(g) {
+  const nodeIds = new Map(g.nodes.map(n => [n.id, safeCypherId(n.id)]));
+  const lines = [
+    "// Graph-It local export. Review before importing into shared graph databases.",
+    "CREATE CONSTRAINT graph_it_node_id IF NOT EXISTS FOR (n:GraphItNode) REQUIRE n.id IS UNIQUE;",
+  ];
+  for (const n of g.nodes) {
+    lines.push(`MERGE (${nodeIds.get(n.id)}:GraphItNode {id: ${cypherString(n.id)}}) SET ${nodeIds.get(n.id)} += {label: ${cypherString(n.label || n.id)}, kind: ${cypherString(n.kind || "")}, path: ${cypherString(n.path || "")}};`);
+  }
+  for (const e of g.edges) {
+    const from = nodeIds.get(e.from);
+    const to = nodeIds.get(e.to);
+    if (!from || !to) continue;
+    let rel = String(e.type || "RELATED").replace(/[^A-Z0-9_]/gi, "_").toUpperCase() || "RELATED";
+    if (!/^[A-Z_]/.test(rel)) rel = `REL_${rel}`;
+    lines.push(`MATCH (a:GraphItNode {id: ${cypherString(e.from)}}), (b:GraphItNode {id: ${cypherString(e.to)}}) MERGE (a)-[:${rel} {evidence: ${cypherString(e.evidence || "")}, confidence: ${Number(e.confidence || 0)}}]->(b);`);
+  }
+  return lines.join("\n");
+}
+function svg(g) {
+  const degrees = degreeMap(g);
+  const top = g.nodes
+    .map(n => ({ ...n, degree: degrees.get(n.id) || 0 }))
+    .sort((a, b) => b.degree - a.degree)
+    .slice(0, 80);
+  const ids = new Set(top.map(n => n.id));
+  const width = 1400, height = 900, cx = width / 2, cy = height / 2;
+  const radius = Math.min(width, height) * 0.38;
+  const pos = new Map();
+  top.forEach((n, i) => {
+    const angle = (Math.PI * 2 * i) / Math.max(1, top.length);
+    const r = n.kind === "topic" ? radius * 0.55 : radius;
+    pos.set(n.id, { x: cx + Math.cos(angle) * r, y: cy + Math.sin(angle) * r });
+  });
+  const color = n => n.kind === "topic" ? "#fbbf24" : n.kind === "component" ? "#60a5fa" : n.kind === "symbol" ? "#34d399" : n.kind?.includes("doc") ? "#c084fc" : "#94a3b8";
+  const lines = [
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">`,
+    '<rect width="100%" height="100%" fill="#020617"/>',
+    '<style>text{font-family:Segoe UI,Arial,sans-serif;font-size:11px;fill:#e2e8f0}.muted{fill:#94a3b8}</style>',
+    '<text x="32" y="36" style="font-size:22px;font-weight:700">Graph-It Export</text>',
+    `<text x="32" y="58" class="muted">${xml(g.stats?.nodes || g.nodes.length)} nodes · ${xml(g.stats?.edges || g.edges.length)} edges · top ${top.length} by degree</text>`,
+  ];
+  for (const e of g.edges.filter(e => ids.has(e.from) && ids.has(e.to)).slice(0, 350)) {
+    const a = pos.get(e.from), b = pos.get(e.to);
+    lines.push(`<line x1="${a.x.toFixed(1)}" y1="${a.y.toFixed(1)}" x2="${b.x.toFixed(1)}" y2="${b.y.toFixed(1)}" stroke="${e.evidence === "INFERRED" ? "#475569" : "#64748b"}" stroke-width="${e.evidence === "INFERRED" ? "0.8" : "1.2"}" opacity="0.55"/>`);
+  }
+  for (const n of top) {
+    const p = pos.get(n.id);
+    const r = Math.max(5, Math.min(18, 5 + Math.sqrt(n.degree)));
+    lines.push(`<circle cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="${r.toFixed(1)}" fill="${color(n)}" opacity="0.92"><title>${xml(n.label || n.id)} (${xml(n.kind)}) degree ${n.degree}</title></circle>`);
+    if (n.degree >= 4 || n.kind === "topic") lines.push(`<text x="${(p.x + r + 4).toFixed(1)}" y="${(p.y + 4).toFixed(1)}">${xml(String(n.label || n.id).slice(0, 34))}</text>`);
+  }
+  lines.push("</svg>");
+  return lines.join("\n");
+}
+function exportGraph(args = []) {
+  const format = (args[0] || "all").toLowerCase();
+  if (!["all", "graphml", "cypher", "svg"].includes(format)) throw new Error("Usage: node tools/semantic-kg.mjs export [all|graphml|cypher|svg]");
+  const g = load();
+  ensureDir(EXPORT_DIR);
+  const written = [];
+  const write = (name, body) => {
+    const out = path.join(EXPORT_DIR, name);
+    fs.writeFileSync(out, body);
+    written.push(path.relative(ROOT, out));
+  };
+  if (format === "all" || format === "graphml") write("graph.graphml", graphml(g));
+  if (format === "all" || format === "cypher") write("graph.cypher", cypher(g));
+  if (format === "all" || format === "svg") write("graph.svg", svg(g));
+  const manifest = {
+    generatedAt: new Date().toISOString(),
+    format,
+    files: written,
+    privacy: "Local export only. Review before sharing because graph artifacts can reveal project structure and symbol names.",
+  };
+  fs.writeFileSync(path.join(EXPORT_DIR, "manifest.json"), JSON.stringify(manifest, null, 2));
+  console.log(`Graph-It exports written: ${written.join(", ")}`);
+}
+
+function rawKbForQueryResult(result, g) {
+  const paths = new Set();
+  for (const hit of result.hits) {
+    if (hit.node.path) paths.add(hit.node.path);
+    for (const read of hit.nextReads || []) paths.add(read.split(":")[0]);
+  }
+  let bytes = 0;
+  for (const p of paths) {
+    const abs = path.join(ROOT, p);
+    if (fs.existsSync(abs) && fs.statSync(abs).isFile()) bytes += fs.statSync(abs).size;
+  }
+  return Math.round(bytes / 102.4) / 10;
+}
+function proof(args = []) {
+  const queries = args.length ? args : ["architecture", "security privacy", "MCP config", "bootstrap", "quality"];
+  const g = load();
+  const q = computeQuality(g);
+  const queryProof = queries.map(queryText => {
+    const started = Date.now();
+    const result = queryResult({ query: queryText, intent: "auto", limit: 8 });
+    const resultKB = Math.round(Buffer.byteLength(JSON.stringify(result), "utf8") / 102.4) / 10;
+    const rawKB = rawKbForQueryResult(result, g);
+    return {
+      query: queryText,
+      intent: result.intent,
+      ms: Date.now() - started,
+      hits: result.hits.length,
+      resultKB,
+      rawKB,
+      reduction: rawKB > 0 ? Number((rawKB / Math.max(0.1, resultKB)).toFixed(1)) : null,
+      topHits: result.hits.slice(0, 5).map(h => ({ score: h.score, node: h.node, nextReads: h.nextReads })),
+    };
+  });
+  const proofPack = {
+    generatedAt: new Date().toISOString(),
+    privacy: "Local proof artifact only. It summarizes graph quality and query compression without calling external services.",
+    stats: g.stats,
+    quality: { score: q.score, grade: q.grade, metrics: q.metrics, recommendations: q.recommendations },
+    queries: queryProof,
+    nextSteps: [
+      "Use this proof pack to decide whether agents can rely on the graph before raw file reads.",
+      "Publish only sanitized examples; proof artifacts can reveal local file paths and symbols.",
+      "Run export all when graph visualization or Neo4j/GraphML import is needed.",
+    ],
+  };
+  ensureDir(PROOF_DIR);
+  fs.writeFileSync(path.join(PROOF_DIR, "proof.json"), JSON.stringify(proofPack, null, 2));
+  fs.writeFileSync(path.join(PROOF_DIR, "proof.md"), renderProofMarkdown(proofPack));
+  console.log(`Wrote ${path.relative(ROOT, path.join(PROOF_DIR, "proof.md"))}`);
+}
+function parseExamplesArgs(args) {
+  const opts = { name: slug(path.basename(ROOT)) || "project", public: false };
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (arg === "--name") opts.name = slug(args[++i] || opts.name);
+    else if (arg.startsWith("--name=")) opts.name = slug(arg.slice("--name=".length));
+    else if (arg === "--public") opts.public = true;
+    else throw new Error(`Unknown examples option: ${arg}`);
+  }
+  return opts;
+}
+function redactPathForExample(p, opts) {
+  if (!opts.public) return p;
+  return String(p || "").split(/[\\/]/).map((part, i, arr) => i === arr.length - 1 ? part : `dir${i + 1}`).join("/");
+}
+function examples(args = []) {
+  const opts = parseExamplesArgs(args);
+  const g = load();
+  const q = computeQuality(g);
+  const outDir = path.join(EXAMPLES_DIR, opts.name);
+  ensureDir(outDir);
+  const sampleNodes = g.nodes
+    .filter(n => ["topic", "component", "symbol", "doc_file", "code_file"].includes(n.kind))
+    .slice(0, 40)
+    .map(n => ({ kind: n.kind, label: n.label, path: redactPathForExample(n.path, opts), summary: opts.public ? String(n.summary || "").replace(/[A-Z]:\\[^ ]+/g, "[local-path]") : n.summary }));
+  const sampleEdges = g.edges.slice(0, 80).map(e => ({ type: e.type, evidence: e.evidence, confidence: e.confidence }));
+  const example = {
+    generatedAt: new Date().toISOString(),
+    mode: opts.public ? "public-sanitized" : "local",
+    stats: g.stats,
+    quality: { score: q.score, grade: q.grade },
+    sampleNodes,
+    sampleEdges,
+    artifacts: {
+      graph: "graph-sample.json",
+      report: "review.md",
+    },
+  };
+  fs.writeFileSync(path.join(outDir, "graph-sample.json"), JSON.stringify(example, null, 2));
+  fs.writeFileSync(path.join(outDir, "review.md"), `# Graph-It Worked Example: ${opts.name}\n\nMode: ${example.mode}\n\n## Summary\n\n| Metric | Value |\n|---|---:|\n| Nodes | ${g.stats.nodes} |\n| Edges | ${g.stats.edges} |\n| Files | ${g.stats.files} |\n| Quality | ${q.score}/100 (${q.grade}) |\n\n## What to inspect\n\n- Run \`node tools/semantic-kg.mjs proof \"architecture\" \"security privacy\"\` for query evidence.\n- Open \`.semantic-kg/graph.html\` locally for navigation.\n- Review \`.semantic-kg/quality.md\` before relying on inferred links.\n\n## Caveat\n\n${opts.public ? "This example is sanitized for public sharing and intentionally omits raw graph details that may expose private project structure." : "This local example may include project structure and should be reviewed before sharing."}\n`);
+  console.log(`Wrote worked example to ${path.relative(ROOT, outDir)}`);
+}
+function agentRuleText(platform) {
+  const base = `# Graph-It Agent Rules\n\nUse Graph-It before broad raw-file reads. Prefer scoped graph queries for architecture, ownership, impact, and code-navigation questions.\n\nCommands:\n- Build: \`node tools/semantic-kg.mjs build\`\n- Query: \`node tools/semantic-kg.mjs query --intent=code \"SymbolName\"\`\n- Docs query: \`node tools/semantic-kg.mjs query --intent=docs \"release architecture\"\`\n- Delta: \`node tools/semantic-kg.mjs delta\`\n- Quality: \`node tools/semantic-kg.mjs quality\`\n- Proof: \`node tools/semantic-kg.mjs proof \"architecture\" \"security privacy\"\`\n\nPrivacy:\n- Treat \`.semantic-kg/\` as local operational data.\n- Do not share graph artifacts externally without review.\n- Prefer EXTRACTED edges; treat INFERRED and AMBIGUOUS edges as guidance.\n`;
+  if (platform === "cursor") return `---\nalwaysApply: true\n---\n\n${base}`;
+  if (platform === "claude") return `${base}\nWhen the user asks about this repo, query Graph-It first unless the graph is missing or stale.\n`;
+  if (platform === "codex") return `${base}\nFor coding tasks, start with Graph-It query/quality/delta before large recursive searches.\n`;
+  if (platform === "copilot") return `${base}\nFor GitHub Copilot CLI sessions, use Graph-It as the first local context source before opening many files.\n`;
+  return base;
+}
+function agentRules(args = []) {
+  const target = (args[0] || "all").toLowerCase();
+  const platforms = target === "all" ? ["generic", "copilot", "claude", "cursor", "codex"] : [target];
+  const valid = new Set(["generic", "copilot", "claude", "cursor", "codex"]);
+  for (const p of platforms) if (!valid.has(p)) throw new Error("Usage: node tools/semantic-kg.mjs agent-rules [all|generic|copilot|claude|cursor|codex]");
+  ensureDir(AGENT_RULES_DIR);
+  const files = [];
+  for (const p of platforms) {
+    const name = p === "cursor" ? "cursor-graph-it.mdc" : `${p}-graph-it.md`;
+    const out = path.join(AGENT_RULES_DIR, name);
+    fs.writeFileSync(out, agentRuleText(p));
+    files.push(path.relative(ROOT, out));
+  }
+  const manifest = { generatedAt: new Date().toISOString(), files, nextSteps: ["Copy or symlink the relevant rule into your agent's supported instruction location.", "Keep generated rule files local unless your team approves committing agent instructions."] };
+  fs.writeFileSync(path.join(AGENT_RULES_DIR, "manifest.json"), JSON.stringify(manifest, null, 2));
+  console.log(`Wrote agent rule pack: ${files.join(", ")}`);
+}
+function renderProofMarkdown(p) {
+  return `# Graph-It Proof Pack\n\nGenerated: ${p.generatedAt}\n\nPrivacy: ${p.privacy}\n\n## Graph Health\n\n| Metric | Value |\n|---|---:|\n| Nodes | ${p.stats.nodes} |\n| Edges | ${p.stats.edges} |\n| Files | ${p.stats.files} |\n| Inferred edges | ${p.stats.inferredEdges} |\n| Quality score | ${p.quality.score}/100 (${p.quality.grade}) |\n\n## Query Compression\n\n| Query | Intent | Hits | Result KB | Raw KB | Reduction |\n|---|---|---:|---:|---:|---:|\n${p.queries.map(q => `| ${md(q.query)} | ${q.intent} | ${q.hits} | ${q.resultKB} | ${q.rawKB} | ${q.reduction ?? "n/a"} |`).join("\n")}\n\n## Top Hits\n\n${p.queries.map(q => `### ${md(q.query)}\n\n${q.topHits.length ? q.topHits.map(h => `- **${md(h.node.label || h.node.id)}** (${h.node.kind}${h.node.path ? `, \`${h.node.path}\`` : ""}) score ${h.score}`).join("\n") : "- No hits"}`).join("\n\n")}\n\n## Recommendations\n\n${p.quality.recommendations.map(r => `- ${md(r)}`).join("\n")}\n`;
+}
+
 function yamlValue(v) { return String(v ?? "").replace(/"/g, '\\"'); }
 function obsidianFolder(n) {
   if (n.kind === "topic") return "concepts";
@@ -637,19 +931,135 @@ function ingest(args) {
   console.log(`Staged ${items.filter(i => i.status === "staged").length} file(s) in ${path.relative(ROOT, ingestDir)}`);
 }
 
+function parseEnrichArgs(args) {
+  const opts = { provider: "local", extractText: false, limit: 50 };
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (arg === "--provider") opts.provider = args[++i] || "local";
+    else if (arg.startsWith("--provider=")) opts.provider = arg.slice("--provider=".length);
+    else if (arg === "--extract-text") opts.extractText = true;
+    else if (arg.startsWith("--limit=")) opts.limit = Math.max(1, Math.min(500, Number(arg.slice("--limit=".length)) || 50));
+    else if (arg) throw new Error(`Unknown enrich option: ${arg}`);
+  }
+  return opts;
+}
+function unzipTextEntries(buf, entryFilter) {
+  const out = [];
+  let offset = 0;
+  while (offset + 30 < buf.length) {
+    if (buf.readUInt32LE(offset) !== 0x04034b50) break;
+    const method = buf.readUInt16LE(offset + 8);
+    const compressedSize = buf.readUInt32LE(offset + 18);
+    const fileNameLength = buf.readUInt16LE(offset + 26);
+    const extraLength = buf.readUInt16LE(offset + 28);
+    const nameStart = offset + 30;
+    const dataStart = nameStart + fileNameLength + extraLength;
+    const name = buf.slice(nameStart, nameStart + fileNameLength).toString("utf8");
+    const dataEnd = dataStart + compressedSize;
+    if (dataEnd > buf.length) break;
+    if (entryFilter(name)) {
+      const data = buf.slice(dataStart, dataEnd);
+      try {
+        const text = method === 0 ? data.toString("utf8") : method === 8 ? zlib.inflateRawSync(data).toString("utf8") : "";
+        if (text) out.push({ name, text });
+      } catch {
+        out.push({ name, text: "" });
+      }
+    }
+    offset = dataEnd;
+  }
+  return out;
+}
+function xmlText(xmlContent) {
+  return String(xmlContent || "")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+function officeText(buf, ext) {
+  const entries = unzipTextEntries(buf, name => {
+    if (ext === ".docx") return /^word\/document\.xml$|^word\/footnotes\.xml$|^word\/endnotes\.xml$/.test(name);
+    if (ext === ".pptx") return /^ppt\/slides\/slide\d+\.xml$|^ppt\/notesSlides\/notesSlide\d+\.xml$/.test(name);
+    if (ext === ".xlsx") return /^xl\/sharedStrings\.xml$|^xl\/worksheets\/sheet\d+\.xml$/.test(name);
+    return false;
+  });
+  return entries.map(e => xmlText(e.text)).filter(Boolean).join("\n\n").slice(0, 20000);
+}
+function printablePdfText(buf) {
+  const raw = buf.toString("latin1");
+  const chunks = [];
+  for (const match of raw.matchAll(/\(([^()\r\n]{4,200})\)\s*T[jJ]/g)) {
+    chunks.push(match[1].replace(/\\([()\\])/g, "$1"));
+    if (chunks.join(" ").length > 8000) break;
+  }
+  return chunks.join(" ").replace(/\s+/g, " ").trim();
+}
+function localExtractForNode(n) {
+  if (!n.path) return { status: "skipped", reason: "node has no path" };
+  const abs = path.join(ROOT, n.path);
+  if (!fs.existsSync(abs) || !fs.statSync(abs).isFile()) return { status: "missing", path: n.path };
+  const ext = path.extname(abs).toLowerCase();
+  if (TEXT_EXTS.has(ext) || [".csv", ".yaml", ".yml"].includes(ext)) {
+    const text = fs.readFileSync(abs, "utf8").slice(0, 16000);
+    return { status: "extracted", path: n.path, method: "local-text", text };
+  }
+  if (ext === ".pdf") {
+    const text = printablePdfText(fs.readFileSync(abs));
+    return text
+      ? { status: "extracted", path: n.path, method: "local-pdf-basic", text }
+      : { status: "planned", path: n.path, method: "pdf", reason: "No simple embedded text found. Use an approved local PDF extractor for richer text." };
+  }
+  if (IMAGE_EXTS.has(ext)) return { status: "planned", path: n.path, method: "ocr", reason: "OCR is intentionally not bundled. Use an approved local OCR adapter before model enrichment." };
+  if ([".docx", ".pptx", ".xlsx"].includes(ext)) {
+    const text = officeText(fs.readFileSync(abs), ext);
+    return text
+      ? { status: "extracted", path: n.path, method: `local-${ext.slice(1)}-zip-text`, text }
+      : { status: "planned", path: n.path, method: "office", reason: "No extractable Office XML text found. Use an approved richer local Office adapter if needed." };
+  }
+  return { status: "skipped", path: n.path, reason: `No local extractor for ${ext || "extensionless file"}.` };
+}
+function writeLocalExtractionBundle(g, limit) {
+  const outDir = path.join(ENRICH_DIR, "local-extract");
+  fs.rmSync(outDir, { recursive: true, force: true });
+  ensureDir(outDir);
+  const candidates = g.nodes.filter(n => n.kind !== "topic" && n.path).slice(0, limit);
+  const manifest = [];
+  for (const n of candidates) {
+    const item = localExtractForNode(n);
+    const fileSlug = slug(`${n.kind}-${n.path || n.id}`) || sha(Buffer.from(n.id)).slice(0, 12);
+    if (item.text) {
+      const out = path.join(outDir, `${fileSlug}.md`);
+      fs.writeFileSync(out, `---\nsource: "${yamlValue(item.path)}"\nmethod: "${yamlValue(item.method)}"\nevidence: "EXTRACTED"\n---\n\n# ${n.label || n.id}\n\n${item.text}\n`);
+      item.output = path.relative(ROOT, out);
+      delete item.text;
+    }
+    manifest.push({ node: compactNode(n), ...item });
+  }
+  const manifestPath = path.join(outDir, "manifest.json");
+  fs.writeFileSync(manifestPath, JSON.stringify({ generatedAt: new Date().toISOString(), items: manifest }, null, 2));
+  return { outputDir: path.relative(ROOT, outDir), manifest: path.relative(ROOT, manifestPath), counts: manifest.reduce((acc, item) => { acc[item.status] = (acc[item.status] || 0) + 1; return acc; }, {}) };
+}
 function enrich(args) {
   const g = load();
-  const providerIdx = args.indexOf("--provider");
-  const provider = providerIdx >= 0 ? args[providerIdx + 1] : "local";
+  const opts = parseEnrichArgs(args);
+  if (opts.provider !== "local") throw new Error("Only --provider local is supported by the bundled enterprise-safe runtime. External enrichment must be implemented as an explicit approved adapter.");
+  const localExtraction = opts.extractText ? writeLocalExtractionBundle(g, opts.limit) : { skipped: true, runWith: "node tools/semantic-kg.mjs enrich --provider local --extract-text" };
   const plan = {
     generatedAt: new Date().toISOString(),
-    provider,
+    provider: opts.provider,
     status: "plan-only",
     privacy: "No content was sent to any model by this command.",
+    localExtraction,
     candidateNodes: g.nodes.filter(n => n.kind !== "topic").slice(0, 50).map(n => compactNode(n)),
     nextSteps: [
-      "Choose an approved local/provider path.",
-      "Generate proposed summaries and relationships into enrichment.proposed.json.",
+      "Use --extract-text to create local sidecars for text-like files and basic PDF text when available.",
+      "Use an approved local OCR/PDF/Office adapter for richer binary extraction.",
+      "Generate proposed summaries and relationships into enrichment.proposed.json only after review.",
       "Review before merging into graph.json.",
     ],
   };
@@ -1449,10 +1859,7 @@ function watch(args) {
   console.log(`Watching for changes every ${opts.intervalMs}ms. Press Ctrl+C to stop.`);
   setInterval(check, opts.intervalMs);
 }
-function installPostCommitHook() {
-  const gitDir = path.join(ROOT, ".git");
-  if (!fs.existsSync(gitDir)) throw new Error("Cannot install hook because .git was not found in this project root.");
-  ensureDir(path.dirname(POST_COMMIT_HOOK));
+function postCommitHookBlock() {
   const start = "# graph-it managed block: start";
   const end = "# graph-it managed block: end";
   const block = [
@@ -1464,25 +1871,170 @@ function installPostCommitHook() {
     "fi",
     end,
   ].join("\n");
-  const existing = fs.existsSync(POST_COMMIT_HOOK) ? fs.readFileSync(POST_COMMIT_HOOK, "utf8").replace(/\r\n/g, "\n") : "";
+  return { start, end, block };
+}
+function installPostCommitHookForRoot(projectRoot) {
+  const gitDir = path.join(projectRoot, ".git");
+  if (!fs.existsSync(gitDir)) throw new Error("Cannot install hook because .git was not found in this project root.");
+  const hookPath = path.join(gitDir, "hooks", "post-commit");
+  ensureDir(path.dirname(hookPath));
+  const { start, end, block } = postCommitHookBlock();
+  const existing = fs.existsSync(hookPath) ? fs.readFileSync(hookPath, "utf8").replace(/\r\n/g, "\n") : "";
   const managedBlockRx = new RegExp(`${escapeRx(start)}[\\s\\S]*?${escapeRx(end)}`);
   let unmanaged = existing.replace(managedBlockRx, "").trimEnd();
   if (!unmanaged) unmanaged = "#!/bin/sh";
   else if (!unmanaged.startsWith("#!")) unmanaged = `#!/bin/sh\n\n${unmanaged}`;
   const next = `${unmanaged}\n\n${block}\n`;
-  fs.writeFileSync(POST_COMMIT_HOOK, next.replace(/\n/g, "\n"));
+  fs.writeFileSync(hookPath, next.replace(/\n/g, "\n"));
   try {
-    fs.chmodSync(POST_COMMIT_HOOK, 0o755);
+    fs.chmodSync(hookPath, 0o755);
   } catch (err) {
     console.warn(`Could not mark hook executable: ${err.message}`);
   }
-  console.log(`Installed Graph-It managed post-commit hook at ${path.relative(ROOT, POST_COMMIT_HOOK)}.`);
+  return hookPath;
+}
+function installPostCommitHook() {
+  const hookPath = installPostCommitHookForRoot(ROOT);
+  console.log(`Installed Graph-It managed post-commit hook at ${path.relative(ROOT, hookPath)}.`);
   console.log("The hook refreshes build, wiki, and viewer artifacts after each commit.");
 }
 function hook(args) {
   const subcommand = args[0] || "";
   if (subcommand === "install") installPostCommitHook();
   else { console.error("Usage: node tools/semantic-kg.mjs hook install"); process.exit(1); }
+}
+function parseBootstrapArgs(args) {
+  const opts = { target: ".", withHook: false, build: false, force: false };
+  for (const arg of args) {
+    if (arg === "--with-hook") opts.withHook = true;
+    else if (arg === "--build") opts.build = true;
+    else if (arg === "--force") opts.force = true;
+    else if (arg === "--help" || arg === "-h") opts.help = true;
+    else if (!arg.startsWith("--") && opts.target === ".") opts.target = arg;
+    else throw new Error(`Unknown bootstrap option: ${arg}`);
+  }
+  return opts;
+}
+function normalizeProjectRoot(target) {
+  const root = path.resolve(ROOT, target || ".");
+  if (!fs.existsSync(root)) throw new Error(`Target directory does not exist: ${root}`);
+  if (!fs.statSync(root).isDirectory()) throw new Error(`Target is not a directory: ${root}`);
+  return root;
+}
+function ensureGitignoreEntry(projectRoot) {
+  const gitignorePath = path.join(projectRoot, ".gitignore");
+  const entry = ".semantic-kg/";
+  const existing = fs.existsSync(gitignorePath) ? fs.readFileSync(gitignorePath, "utf8") : "";
+  const lines = existing.split(/\r?\n/).map(line => line.trim());
+  if (lines.includes(entry) || lines.includes(".semantic-kg")) return { path: gitignorePath, changed: false };
+  const prefix = existing && !existing.endsWith("\n") ? "\n" : "";
+  fs.writeFileSync(gitignorePath, `${existing}${prefix}${entry}\n`);
+  return { path: gitignorePath, changed: true };
+}
+function installToolIntoProject(projectRoot, opts) {
+  const targetTool = path.join(projectRoot, "tools", "semantic-kg.mjs");
+  ensureDir(path.dirname(targetTool));
+  const source = fs.readFileSync(TOOL_SOURCE_PATH);
+  const targetExists = fs.existsSync(targetTool);
+  if (targetExists) {
+    const current = fs.readFileSync(targetTool);
+    if (sha(current) === sha(source)) return { path: targetTool, changed: false, skipped: false, reason: "already current" };
+    if (!opts.force && path.resolve(targetTool) !== TOOL_SOURCE_PATH) {
+      return { path: targetTool, changed: false, skipped: true, reason: "different existing tool; rerun with --force to replace" };
+    }
+  }
+  fs.writeFileSync(targetTool, source);
+  return { path: targetTool, changed: true, skipped: false, reason: targetExists ? "replaced" : "created" };
+}
+function updatePackageScripts(projectRoot) {
+  const packagePath = path.join(projectRoot, "package.json");
+  if (!fs.existsSync(packagePath)) return { path: packagePath, changed: false, skipped: true, reason: "package.json not found" };
+  const raw = fs.readFileSync(packagePath, "utf8");
+  const pkg = JSON.parse(raw);
+  const scripts = { ...(pkg.scripts || {}) };
+  let changed = false;
+  for (const [name, command] of Object.entries(PACKAGE_SCRIPTS)) {
+    if (scripts[name] === command) continue;
+    if (scripts[name] && scripts[name] !== command) continue;
+    scripts[name] = command;
+    changed = true;
+  }
+  if (!changed && pkg.scripts) return { path: packagePath, changed: false, skipped: false, reason: "already current" };
+  pkg.scripts = scripts;
+  fs.writeFileSync(packagePath, `${JSON.stringify(pkg, null, 2)}\n`);
+  return { path: packagePath, changed: true, skipped: false, reason: "scripts updated" };
+}
+function runProjectCommand(projectRoot, args) {
+  const result = spawnSync("node", ["tools/semantic-kg.mjs", ...args], {
+    cwd: projectRoot,
+    encoding: "utf8",
+  });
+  return {
+    command: `node tools/semantic-kg.mjs ${args.join(" ")}`,
+    status: result.status,
+    ok: result.status === 0,
+    stdout: (result.stdout || "").trim(),
+    stderr: (result.stderr || "").trim(),
+  };
+}
+function bootstrapResult(args = []) {
+  const opts = parseBootstrapArgs(args);
+  if (opts.help) {
+    return {
+      usage: "node tools/semantic-kg.mjs bootstrap [target-dir] [--with-hook] [--build] [--force]",
+      options: {
+        "--with-hook": "Install the managed post-commit hook in the target repo.",
+        "--build": "Run a local graph build after installing the tool.",
+        "--force": "Replace an existing different tools/semantic-kg.mjs.",
+      },
+    };
+  }
+  const projectRoot = normalizeProjectRoot(opts.target);
+  const tool = installToolIntoProject(projectRoot, opts);
+  const gitignore = ensureGitignoreEntry(projectRoot);
+  const packageScripts = updatePackageScripts(projectRoot);
+  const hook = { skipped: true, reason: "run with --with-hook to install the managed post-commit hook" };
+  if (opts.withHook) {
+    const hookPath = installPostCommitHookForRoot(projectRoot);
+    hook.skipped = false;
+    hook.changed = true;
+    hook.path = hookPath;
+    hook.reason = "installed";
+  }
+  const build = opts.build && !tool.skipped
+    ? runProjectCommand(projectRoot, ["build"])
+    : { skipped: true, reason: opts.build ? "tool install was skipped" : "run with --build to build immediately" };
+  return {
+    generatedAt: new Date().toISOString(),
+    projectRoot,
+    sourceTool: TOOL_SOURCE_PATH,
+    enterpriseDefaults: {
+      localFirst: true,
+      externalUploads: false,
+      graphArtifactsIgnored: true,
+      evidenceLabels: ["EXTRACTED", "INFERRED", "AMBIGUOUS"],
+    },
+    changes: { tool, gitignore, packageScripts, hook, build },
+    nextSteps: [
+      "Run npm run kg:build or node tools/semantic-kg.mjs build in the target repo.",
+      "Run npm run kg:quality and review .semantic-kg/quality.md before relying on the graph.",
+      "Run npm run kg:mcp:config -- --smoke-test, then wire the emitted MCP snippet into your client.",
+      "Use graph.query before opening raw files and graph.delta after rebuilds.",
+    ],
+  };
+}
+function bootstrap(args) {
+  console.log(JSON.stringify(bootstrapResult(args), null, 2));
+}
+function install(args = []) {
+  const translated = [];
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (arg === "--project") translated.push(args[++i] || ".");
+    else if (arg.startsWith("--project=")) translated.push(arg.slice("--project=".length));
+    else translated.push(arg);
+  }
+  bootstrap(translated);
 }
 function parseMcpConfigArgs(args) {
   const opts = { client: "all", smokeTest: false };
@@ -1653,6 +2205,28 @@ const MCP_TOOLS = [
     inputSchema: { type: "object", properties: {}, additionalProperties: false },
   },
   {
+    name: "graph.export",
+    description: "Write local GraphML, Cypher, and/or SVG graph exports under .semantic-kg/exports.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        format: { type: "string", enum: ["all", "graphml", "cypher", "svg"], description: "Export format. Defaults to all." },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "graph.proof",
+    description: "Write a local proof pack with quality score, representative queries, and token/context reduction proxy.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        queries: { type: "array", items: { type: "string" }, description: "Representative proof queries." },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
     name: "graph.mcp_config",
     description: "Return copy-ready local MCP client configuration for this Graph-It project.",
     inputSchema: {
@@ -1679,6 +2253,14 @@ function callMcpTool(name, args = {}) {
     return mcpContent({ message: built.output, stats: statsResult() });
   }
   if (name === "graph.delta") return mcpContent(deltaResult());
+  if (name === "graph.export") {
+    const exported = captureConsole(() => exportGraph([args.format || "all"]));
+    return mcpContent({ message: exported.output, exportDir: path.relative(ROOT, EXPORT_DIR) });
+  }
+  if (name === "graph.proof") {
+    const proofed = captureConsole(() => proof(Array.isArray(args.queries) ? args.queries : []));
+    return mcpContent({ message: proofed.output, proofDir: path.relative(ROOT, PROOF_DIR) });
+  }
   if (name === "graph.mcp_config") return mcpContent(mcpConfigResult([`--client=${args.client || "all"}`, ...(args.smokeTest ? ["--smoke-test"] : [])]));
   throw new Error(`Unknown MCP tool: ${name}`);
 }
@@ -1766,11 +2348,17 @@ else if (cmd === "delta") delta();
 else if (cmd === "wiki") wiki();
 else if (cmd === "viewer") viewer();
 else if (cmd === "quality") quality();
+else if (cmd === "export") exportGraph(args);
+else if (cmd === "proof") proof(args);
+else if (cmd === "examples") examples(args);
+else if (cmd === "agent-rules") agentRules(args);
 else if (cmd === "obsidian") obsidian();
 else if (cmd === "ingest") ingest(args);
 else if (cmd === "enrich") enrich(args);
 else if (cmd === "watch") watch(args);
 else if (cmd === "hook") hook(args);
+else if (cmd === "bootstrap") bootstrap(args);
+else if (cmd === "install") install(args);
 else if (cmd === "mcp") mcp();
 else if (cmd === "mcp-config") mcpConfig(args);
 else if (cmd === "path") pathBetween(args[0] || "", args[1] || "");
