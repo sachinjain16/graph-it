@@ -15,7 +15,8 @@
     "INSTALL.md",
     "ARCHITECTURE.md",
     "SECURITY.md",
-    "SEMANTIC_GRAPH_ROADMAP.md"
+    "SEMANTIC_GRAPH_ROADMAP.md",
+    "docs/assets/graph-it-logo.svg"
   ],
   "scripts": {
     "kg:build": "node tools/semantic-kg.mjs build",

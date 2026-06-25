@@ -1,3 +1,19 @@
+<p align="center">
+  <img src="docs/assets/graph-it-logo.svg" alt="Graph-It: local knowledge graphs for AI coding agents" width="820">
+</p>
+
+<p align="center">
+  <strong>Enterprise-first local knowledge graphs for AI coding agents.</strong><br>
+  Query compact evidence-labeled project context before opening raw source files.
+</p>
+
+<p align="center">
+  <a href="https://github.com/sachinjain16/graph-it/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/sachinjain16/graph-it/actions/workflows/ci.yml/badge.svg"></a>
+  <img alt="Local-first" src="https://img.shields.io/badge/local--first-no%20uploads-0f766e">
+  <img alt="MCP" src="https://img.shields.io/badge/MCP-stdio%20tools-2563eb">
+  <img alt="Node" src="https://img.shields.io/badge/node-20%2B-16a34a">
+</p>
+
 # Graph-It
 
 **Graph-It** is an enterprise-first, local-first semantic knowledge graph for **AI coding agents**. It gives Copilot CLI, Claude Code, Cursor, Codex, Clawpilot, and other MCP-capable agents a compact project map before they open raw source files.
@@ -12,6 +28,16 @@ The core idea is simple: **query the graph first, then read only the files and l
 - **Repo-local install**: bootstrap any repo with safe defaults, npm scripts, `.semantic-kg/` ignore rules, optional build, and optional git hook.
 - **Useful beyond one assistant**: generate instruction packs for generic agents, Copilot CLI, Claude Code, Cursor, and Codex.
 - **Proof before adoption**: write local proof packs showing graph quality, query hits, and context-reduction proxies.
+
+## At a glance
+
+| Need | Graph-It answer |
+|---|---|
+| Stop agents from reading half the repo | Query `.semantic-kg/graph.json` first, then inspect targeted files/ranges. |
+| Keep confidential code local | No uploads, no external model calls, ignored local artifacts by default. |
+| Support multiple AI coding agents | MCP stdio tools plus generated rules for Copilot CLI, Claude Code, Cursor, Codex, and generic agents. |
+| Trust but verify graph output | Evidence labels, quality score, proof packs, delta reports, and drift reports. |
+| Bring it to another repo fast | `graph-it install --project ..\target-repo --build` or repo-local bootstrap. |
 
 ## What it builds
 

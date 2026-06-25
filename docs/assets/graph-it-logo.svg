@@ -1,0 +1,69 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="280" viewBox="0 0 960 280" role="img" aria-labelledby="title desc">
+  <title id="title">Graph-It logo</title>
+  <desc id="desc">Enterprise local knowledge graph logo showing connected nodes, an agent cursor, and a shield-like graph boundary.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" x2="1" y1="0" y2="1">
+      <stop offset="0" stop-color="#061225"/>
+      <stop offset="0.52" stop-color="#0B1733"/>
+      <stop offset="1" stop-color="#102A43"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="0" x2="1" y1="0" y2="1">
+      <stop offset="0" stop-color="#67E8F9"/>
+      <stop offset="0.45" stop-color="#60A5FA"/>
+      <stop offset="1" stop-color="#A78BFA"/>
+    </linearGradient>
+    <linearGradient id="node" x1="0" x2="1" y1="0" y2="1">
+      <stop offset="0" stop-color="#E0F2FE"/>
+      <stop offset="1" stop-color="#38BDF8"/>
+    </linearGradient>
+    <filter id="glow" x="-40%" y="-40%" width="180%" height="180%">
+      <feGaussianBlur stdDeviation="5" result="blur"/>
+      <feColorMatrix in="blur" type="matrix" values="0 0 0 0 0.25 0 0 0 0 0.78 0 0 0 0 1 0 0 0 0.65 0"/>
+      <feMerge>
+        <feMergeNode/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+  <rect width="960" height="280" rx="34" fill="url(#bg)"/>
+  <path d="M48 214 C142 121 238 242 342 136 C420 58 492 78 548 112 C626 158 694 58 808 80 C864 91 900 126 928 158" fill="none" stroke="#1E3A8A" stroke-width="2" opacity="0.55"/>
+  <g transform="translate(62 34)">
+    <path d="M128 7 L231 66 V171 L128 230 L25 171 V66 Z" fill="#071B33" stroke="url(#accent)" stroke-width="3" opacity="0.98"/>
+    <path d="M128 30 L211 78 V159 L128 207 L45 159 V78 Z" fill="none" stroke="#164E63" stroke-width="2" opacity="0.9"/>
+    <g stroke="#38BDF8" stroke-width="3" opacity="0.85">
+      <line x1="78" y1="82" x2="128" y2="55"/>
+      <line x1="128" y1="55" x2="181" y2="91"/>
+      <line x1="78" y1="82" x2="95" y2="144"/>
+      <line x1="181" y1="91" x2="154" y2="160"/>
+      <line x1="95" y1="144" x2="154" y2="160"/>
+      <line x1="128" y1="55" x2="126" y2="119"/>
+      <line x1="126" y1="119" x2="95" y2="144"/>
+      <line x1="126" y1="119" x2="181" y2="91"/>
+      <line x1="126" y1="119" x2="154" y2="160"/>
+    </g>
+    <g filter="url(#glow)">
+      <circle cx="128" cy="55" r="12" fill="url(#node)"/>
+      <circle cx="78" cy="82" r="10" fill="#A78BFA"/>
+      <circle cx="181" cy="91" r="10" fill="#22D3EE"/>
+      <circle cx="126" cy="119" r="13" fill="#F8FAFC"/>
+      <circle cx="95" cy="144" r="10" fill="#60A5FA"/>
+      <circle cx="154" cy="160" r="10" fill="#34D399"/>
+    </g>
+    <path d="M173 145 L218 188 L194 193 L208 223 L191 231 L177 201 L158 218 Z" fill="#F8FAFC" stroke="#0F172A" stroke-width="3"/>
+    <path d="M173 145 L218 188 L194 193" fill="none" stroke="#67E8F9" stroke-width="2"/>
+  </g>
+  <g transform="translate(342 72)">
+    <text x="0" y="0" fill="#F8FAFC" font-family="Segoe UI, Inter, Arial, sans-serif" font-size="68" font-weight="800" letter-spacing="-2">Graph-It</text>
+    <text x="3" y="48" fill="#BAE6FD" font-family="Segoe UI, Inter, Arial, sans-serif" font-size="22" font-weight="600">Local knowledge graphs for AI coding agents</text>
+    <g transform="translate(4 82)" font-family="Segoe UI, Inter, Arial, sans-serif" font-size="15" font-weight="650">
+      <rect x="0" y="0" width="132" height="34" rx="17" fill="#082F49" stroke="#38BDF8"/>
+      <text x="18" y="22" fill="#E0F2FE">MCP-native</text>
+      <rect x="148" y="0" width="142" height="34" rx="17" fill="#172554" stroke="#60A5FA"/>
+      <text x="166" y="22" fill="#DBEAFE">Local-first</text>
+      <rect x="306" y="0" width="170" height="34" rx="17" fill="#1E1B4B" stroke="#A78BFA"/>
+      <text x="324" y="22" fill="#EDE9FE">Evidence-labeled</text>
+      <rect x="492" y="0" width="166" height="34" rx="17" fill="#052E2B" stroke="#34D399"/>
+      <text x="510" y="22" fill="#D1FAE5">Enterprise-safe</text>
+    </g>
+  </g>
+</svg>
