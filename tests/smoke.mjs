@@ -38,7 +38,7 @@ try {
   run("node", ["tools/semantic-kg.mjs", "enrich", "--provider", "local", "--extract-text", "--limit=10"]);
   run("node", ["tools/semantic-kg.mjs", "examples", "--name", "smoke", "--public"]);
   run("node", ["tools/semantic-kg.mjs", "agent-rules", "all"]);
-  run("node", ["tools/semantic-kg.mjs", "mcp-config", "--smoke-test"]);
+  run("node", ["tools/semantic-kg.mjs", "mcp-config"]);
 
   assertFile(".semantic-kg/exports/graph.graphml");
   assertFile(".semantic-kg/exports/graph.cypher");
