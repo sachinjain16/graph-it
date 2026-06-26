@@ -5,6 +5,7 @@ These additions are prioritized for enterprise AI coding-agent use across MCP-ca
 ## Today's shipped backlog
 
 - Agent wiki export for compact topic and community pages.
+- Vault-native Obsidian export with stable note IDs, MOCs, backlinks index, agent entry note, and starter `.obsidian` config.
 - Community and god-node report for bridge nodes, surprising links, and stale/orphaned files.
 - Interactive graph viewer for local search, filters, and neighborhood inspection.
 - Watch mode and managed post-commit hook for keeping local artifacts fresh.
@@ -44,6 +45,26 @@ Expected output:
     build-and-deploy.md
     security-and-privacy.md
 ```
+
+## Shipped: Vault-native Obsidian export
+
+Generate `.semantic-kg/wiki/obsidian/` as a local Obsidian-style vault:
+
+```powershell
+node tools/semantic-kg.mjs obsidian
+```
+
+The vault includes:
+
+- stable note filenames with graph ID hashes
+- YAML frontmatter and `graph-it/*` tags
+- outbound links and backlinks per note
+- `Agent Start Here.md`
+- `Graph-It Index.md`
+- `Graph Quality.md`
+- `Backlinks Index.md`
+- MOCs by note type and semantic topic
+- minimal `.obsidian` starter config
 
 ## Shipped: Community and god-node report
 

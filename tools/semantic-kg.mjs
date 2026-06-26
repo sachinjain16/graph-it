@@ -118,6 +118,7 @@ function md(s) { return String(s ?? "").replace(/\|/g, "\\|").replace(/\r?\n/g, 
 function xml(s) { return String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;"); }
 function cypherString(s) { return JSON.stringify(String(s ?? "")); }
 function safeCypherId(id) { return `n${sha(Buffer.from(String(id))).slice(0, 12)}`; }
+function groupBy(items, keyFn) { const map = new Map(); for (const item of items) { const key = keyFn(item); if (!map.has(key)) map.set(key, []); map.get(key).push(item); } return map; }
 function fileId(p) { return `file:${p}`; }
 function symbolId(p, name) { return `symbol:${p}:${name}`; }
 function sectionId(p, line, title) { return `section:${p}:${line}:${title.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 80)}`; }
@@ -878,14 +879,28 @@ function obsidianFolder(n) {
   if (n.kind === "topic") return "concepts";
   if (n.kind === "doc" || DOC_EXTS.has(n.ext)) return "docs";
   if (n.kind === "image" || n.kind === "pdf" || n.kind === "video" || n.kind === "archive") return "artifacts";
-  if (n.kind === "symbol" || n.kind === "component") return "symbols";
+  if (n.kind === "symbol" || n.kind === "component" || n.kind === "export" || n.kind === "dependency") return "symbols";
   return "files";
 }
-function obsidianFileName(n) { return `${slug(n.label || n.id)}.md`; }
-function obsidianLink(n) { return `[[${obsidianFileName(n).replace(/\.md$/, "")}|${n.label || n.id}]]`; }
-function obsidianNodeMarkdown(n, related) {
+function obsidianNoteBase(n) { return `${slug(`${n.kind}-${n.label || n.id}`)}-${sha(Buffer.from(String(n.id))).slice(0, 8)}`; }
+function obsidianFileName(n) { return `${obsidianNoteBase(n)}.md`; }
+function obsidianWikiPath(n) { return `${obsidianFolder(n)}/${obsidianNoteBase(n)}`; }
+function obsidianLink(n) { return `[[${obsidianWikiPath(n)}|${n.label || n.id}]]`; }
+function obsidianTag(t) { return `graph-it/${slug(t)}`; }
+function obsidianNodeMarkdown(n, related, backlinks) {
   const tags = [...new Set([n.kind, ...(n.semanticTags || []).map(slug)].filter(Boolean))];
-  return `---\nid: "${yamlValue(n.id)}"\ntype: "${yamlValue(n.kind)}"\nsource: "${yamlValue(n.path || "")}"\ntags: [${tags.map(t => `"${yamlValue(t)}"`).join(", ")}]\n---\n\n# ${n.label || n.id}\n\n${n.summary || "No summary available."}\n\n${n.path ? `Source: \`${n.path}\`\n\n` : ""}## Related\n\n${related.length ? related.slice(0, 30).map(({ edge, node }) => `- ${obsidianLink(node)} — ${edge.type}${edge.why ? ` (${md(edge.why)})` : ""}`).join("\n") : "- None"}\n`;
+  const outbound = related.filter(x => x.node);
+  const inbound = backlinks.filter(x => x.node);
+  return `---\ngraph_it_id: "${yamlValue(n.id)}"\ntype: "${yamlValue(n.kind)}"\nsource: "${yamlValue(n.path || "")}"\nline: ${Number(n.line || 0)}\ntags: [${tags.map(t => `"${yamlValue(obsidianTag(t))}"`).join(", ")}]\nevidence: "EXTRACTED"\n---\n\n# ${n.label || n.id}\n\n${n.summary || "No summary available."}\n\n${n.path ? `Source: \`${n.path}${n.line ? `:${n.line}` : ""}\`\n\n` : ""}## Outbound links\n\n${outbound.length ? outbound.slice(0, 30).map(({ edge, node }) => `- ${obsidianLink(node)} — ${edge.type} (${edge.evidence || "UNSPECIFIED"}${edge.confidence ? `, ${edge.confidence}` : ""})${edge.why ? ` — ${md(edge.why)}` : ""}`).join("\n") : "- None"}\n\n## Backlinks\n\n${inbound.length ? inbound.slice(0, 30).map(({ edge, node }) => `- ${obsidianLink(node)} — ${edge.type} (${edge.evidence || "UNSPECIFIED"})`).join("\n") : "- None"}\n\n## Graph-It queries\n\n- \`node tools/semantic-kg.mjs query "${String(n.label || n.id).replace(/"/g, '\\"')}"\`\n- \`node tools/semantic-kg.mjs impact "${String(n.label || n.id).replace(/"/g, '\\"')}"\`\n`;
+}
+function obsidianMocMarkdown(title, nodes, intro = "") {
+  return `---\ntype: "moc"\ntags: ["graph-it/moc"]\n---\n\n# ${title}\n\n${intro ? `${intro}\n\n` : ""}${nodes.length ? nodes.map(n => `- ${obsidianLink(n)}${n.path ? ` — \`${n.path}${n.line ? `:${n.line}` : ""}\`` : ""}`).join("\n") : "- No notes in this section."}\n`;
+}
+function obsidianStarterConfig(vault) {
+  const obsidianDir = path.join(vault, ".obsidian");
+  ensureDir(obsidianDir);
+  fs.writeFileSync(path.join(obsidianDir, "app.json"), JSON.stringify({ alwaysUpdateLinks: true, newFileLocation: "folder", newFileFolderPath: "inbox", readableLineLength: true }, null, 2));
+  fs.writeFileSync(path.join(obsidianDir, "graph.json"), JSON.stringify({ search: "tag:#graph-it", showTags: true, showAttachments: false, hideUnresolved: false }, null, 2));
 }
 function obsidian() {
   const g = load();
@@ -894,6 +909,14 @@ function obsidian() {
   const vault = path.join(WIKI_DIR, "obsidian");
   fs.rmSync(vault, { recursive: true, force: true });
   ensureDir(vault);
+  ensureDir(path.join(vault, "MOCs"));
+  obsidianStarterConfig(vault);
+  const incoming = new Map(g.nodes.map(n => [n.id, []]));
+  for (const e of g.edges) {
+    const from = nodes.get(e.from);
+    const to = nodes.get(e.to);
+    if (from && to) incoming.get(e.to)?.push({ edge: e, node: from });
+  }
   for (const n of g.nodes) {
     const folder = path.join(vault, obsidianFolder(n));
     ensureDir(folder);
@@ -901,10 +924,23 @@ function obsidian() {
       edge: g.edges.find(e => (e.from === n.id && e.to === nb.node.id) || (e.to === n.id && e.from === nb.node.id)) || { type: nb.type },
       node: nodes.get(nb.node.id),
     })).filter(x => x.node);
-    fs.writeFileSync(path.join(folder, obsidianFileName(n)), obsidianNodeMarkdown(n, related));
+    fs.writeFileSync(path.join(folder, obsidianFileName(n)), obsidianNodeMarkdown(n, related, incoming.get(n.id) || []));
   }
   const q = computeQuality(g);
-  fs.writeFileSync(path.join(vault, "Graph-It Index.md"), `# Graph-It Index\n\nScore: **${q.score}/100** (${q.grade})\n\n## Folders\n\n- [[concepts]]\n- [[docs]]\n- [[files]]\n- [[symbols]]\n- [[artifacts]]\n\n## Top nodes\n\n${[...degreeMap(g).entries()].sort((a,b)=>b[1]-a[1]).slice(0,20).map(([id,d]) => `- ${obsidianLink(nodes.get(id) || { id, label: id })} — degree ${d}`).join("\n")}\n`);
+  const degrees = degreeMap(g);
+  const topNodes = [...degrees.entries()].sort((a,b)=>b[1]-a[1]).slice(0,30).map(([id]) => nodes.get(id)).filter(Boolean);
+  const byFolder = groupBy(g.nodes, n => obsidianFolder(n));
+  for (const [folder, members] of byFolder.entries()) {
+    fs.writeFileSync(path.join(vault, "MOCs", `${slug(folder)}.md`), obsidianMocMarkdown(`${folder} MOC`, members.slice(0, 200), `Map of Content for Graph-It ${folder} notes.`));
+  }
+  for (const topic of g.nodes.filter(n => n.kind === "topic")) {
+    const members = g.edges.filter(e => e.to === topic.id || e.from === topic.id).map(e => nodes.get(e.from === topic.id ? e.to : e.from)).filter(Boolean);
+    fs.writeFileSync(path.join(vault, "MOCs", `${slug(topic.label)}.md`), obsidianMocMarkdown(`${topic.label} MOC`, [...new Set(members)].slice(0, 120), `Topic-centered view from Graph-It.`));
+  }
+  fs.writeFileSync(path.join(vault, "Backlinks Index.md"), `---\ntype: "index"\ntags: ["graph-it/index", "graph-it/backlinks"]\n---\n\n# Backlinks Index\n\n${g.nodes.map(n => `## ${obsidianLink(n)}\n\n${(incoming.get(n.id) || []).length ? (incoming.get(n.id) || []).slice(0, 20).map(({ edge, node }) => `- ${obsidianLink(node)} — ${edge.type} (${edge.evidence || "UNSPECIFIED"})`).join("\n") : "- No backlinks"}\n`).join("\n")}`);
+  fs.writeFileSync(path.join(vault, "Agent Start Here.md"), `---\ntype: "agent-entry"\ntags: ["graph-it/agent", "graph-it/start"]\n---\n\n# Agent Start Here\n\nUse this vault as compact repo memory before opening raw files.\n\n1. Read [[Graph-It Index]].\n2. Check [[Graph Quality]].\n3. Use relevant MOCs under [[MOCs/index|MOCs]].\n4. Prefer notes with EXTRACTED relationships before using INFERRED links.\n\n## Useful local commands\n\n- \`node tools/semantic-kg.mjs query --intent=code "SymbolName"\`\n- \`node tools/semantic-kg.mjs query --intent=docs "architecture"\`\n- \`node tools/semantic-kg.mjs delta\`\n- \`node tools/semantic-kg.mjs quality\`\n`);
+  fs.writeFileSync(path.join(vault, "MOCs", "index.md"), `---\ntype: "moc-index"\ntags: ["graph-it/moc", "graph-it/index"]\n---\n\n# MOCs\n\n${fs.readdirSync(path.join(vault, "MOCs")).filter(f => f.endsWith(".md") && f !== "index.md").sort().map(f => `- [[MOCs/${f.replace(/\.md$/, "")}|${f.replace(/\.md$/, "")}]]`).join("\n")}\n`);
+  fs.writeFileSync(path.join(vault, "Graph-It Index.md"), `---\ntype: "index"\ntags: ["graph-it/index"]\n---\n\n# Graph-It Index\n\nScore: **${q.score}/100** (${q.grade})\n\n## Start\n\n- [[Agent Start Here]]\n- [[Graph Quality]]\n- [[Backlinks Index]]\n- [[MOCs/index|MOCs]]\n\n## Note folders\n\n- [[MOCs/concepts|Concepts]]\n- [[MOCs/docs|Docs]]\n- [[MOCs/files|Files]]\n- [[MOCs/symbols|Symbols]]\n- [[MOCs/artifacts|Artifacts]]\n\n## Top connected notes\n\n${topNodes.map(n => `- ${obsidianLink(n)} — degree ${degrees.get(n.id) || 0}`).join("\n")}\n`);
   fs.writeFileSync(path.join(vault, "Graph Quality.md"), renderQualityMarkdown(q));
   console.log(`Obsidian vault exported to ${path.relative(ROOT, vault)}`);
 }

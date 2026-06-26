@@ -52,6 +52,7 @@ The core idea is simple: **query the graph first, then read only the files and l
   exports/graph.cypher       Neo4j/Cypher import script
   exports/graph.svg          standalone SVG graph snapshot
   wiki/                      agent-readable topic/community pages
+  wiki/obsidian/             Obsidian-style vault with MOCs/backlinks
   graph.html                 local interactive graph viewer
   enrichment/local-extract/  optional local text sidecars
 
@@ -106,7 +107,7 @@ npm run kg:mcp:config -- --smoke-test
 | `quality` | Score graph trust, coverage, noise, and repair actions. |
 | `proof "query"` | Write local quality/query proof artifacts. |
 | `export all` | Write GraphML, Cypher, SVG, and manifest. |
-| `wiki` / `obsidian` / `viewer` | Write local navigation surfaces. |
+| `wiki` / `obsidian` / `viewer` | Write local navigation surfaces, including an Obsidian vault. |
 | `enrich --provider local --extract-text` | Create local sidecars for text-like, basic PDF, and Office ZIP/XML text. |
 | `examples --name <slug> --public` | Create a sanitized worked-example scaffold for review. |
 | `agent-rules all` | Generate query-first instruction packs for common agent clients. |
@@ -178,6 +179,26 @@ Graph-It is safe by default for confidential engineering workflows:
 - enrichment is local/plan-first unless explicitly extended
 
 See `ARCHITECTURE.md` and `SECURITY.md` for the trust boundary, artifact lifecycle, and extension rules.
+
+## Obsidian vault export
+
+Graph-It can turn a repo graph into a local Obsidian-style vault:
+
+```powershell
+npm run kg:obsidian
+```
+
+The vault includes:
+
+- `Agent Start Here.md`
+- `Graph-It Index.md`
+- `Graph Quality.md`
+- `Backlinks Index.md`
+- `MOCs/` by note type and semantic topic
+- stable note IDs, YAML frontmatter, tags, outbound links, and backlinks
+- a minimal `.obsidian` starter config
+
+Open `.semantic-kg/wiki/obsidian/` as a local Obsidian vault. See `docs/OBSIDIAN-EXPORT.md` for details.
 
 ## Suggested npm scripts
 

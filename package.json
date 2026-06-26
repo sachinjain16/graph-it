@@ -16,6 +16,7 @@
     "ARCHITECTURE.md",
     "SECURITY.md",
     "SEMANTIC_GRAPH_ROADMAP.md",
+    "docs/OBSIDIAN-EXPORT.md",
     "docs/assets/graph-it-logo.svg"
   ],
   "scripts": {
@@ -51,8 +52,11 @@
     "knowledge-graph",
     "semantic-index",
     "agent-tools",
+    "ai-coding-agents",
+    "mcp",
+    "obsidian",
     "local-first",
-    "clawpilot"
+    "enterprise"
   ],
   "author": "Sachin Jain",
   "license": "UNLICENSED"

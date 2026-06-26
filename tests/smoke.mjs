@@ -35,6 +35,7 @@ try {
   run("node", ["tools/semantic-kg.mjs", "quality"]);
   run("node", ["tools/semantic-kg.mjs", "export", "all"]);
   run("node", ["tools/semantic-kg.mjs", "proof", "architecture", "bootstrapGraphIt"]);
+  run("node", ["tools/semantic-kg.mjs", "obsidian"]);
   run("node", ["tools/semantic-kg.mjs", "enrich", "--provider", "local", "--extract-text", "--limit=10"]);
   run("node", ["tools/semantic-kg.mjs", "examples", "--name", "smoke", "--public"]);
   run("node", ["tools/semantic-kg.mjs", "agent-rules", "all"]);
@@ -44,6 +45,10 @@ try {
   assertFile(".semantic-kg/exports/graph.cypher");
   assertFile(".semantic-kg/exports/graph.svg");
   assertFile(".semantic-kg/proof/proof.md");
+  assertFile(".semantic-kg/wiki/obsidian/Agent Start Here.md");
+  assertFile(".semantic-kg/wiki/obsidian/Backlinks Index.md");
+  assertFile(".semantic-kg/wiki/obsidian/MOCs/index.md");
+  assertFile(".semantic-kg/wiki/obsidian/.obsidian/app.json");
   assertFile(".semantic-kg/enrichment/local-extract/manifest.json");
   assertFile("worked/smoke/review.md");
   assertFile(".graph-it/agent-rules/generic-graph-it.md");
