@@ -34,6 +34,7 @@ Output:
 
 ## What makes it vault-native
 
+- Rich note bodies with role summaries, relationship confidence, source excerpts, neighborhood diagrams, and agent prompts.
 - Stable note filenames include type and a short hash of the graph ID.
 - Notes include YAML frontmatter with `graph_it_id`, `type`, `source`, `line`, and `graph-it/*` tags.
 - Each note has outbound links and backlinks.
@@ -41,6 +42,21 @@ Output:
 - `MOCs/` contains Map of Content notes by folder/type and semantic topic.
 - `Backlinks Index.md` provides a vault-wide relationship index.
 - `.obsidian` starter config enables link-safe defaults and graph search for `graph-it` tags.
+
+## What each note contains
+
+Each generated note is intended to be useful before opening raw source:
+
+- intelligence summary
+- source path and line when available
+- evidence rollup
+- relationship confidence narrative
+- local source excerpt for text-like files
+- Mermaid neighborhood map
+- outbound links
+- backlinks
+- suggested agent prompts
+- useful Graph-It commands
 
 ## Recommended use
 

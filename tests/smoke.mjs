@@ -49,6 +49,14 @@ try {
   assertFile(".semantic-kg/wiki/obsidian/Backlinks Index.md");
   assertFile(".semantic-kg/wiki/obsidian/MOCs/index.md");
   assertFile(".semantic-kg/wiki/obsidian/.obsidian/app.json");
+  const agentStart = fs.readFileSync(path.join(tmp, ".semantic-kg/wiki/obsidian/Agent Start Here.md"), "utf8");
+  if (!agentStart.includes("Navigation contract")) throw new Error("Obsidian agent entry is missing navigation guidance");
+  const symbolNote = fs.readdirSync(path.join(tmp, ".semantic-kg/wiki/obsidian/symbols")).find(f => f.endsWith(".md"));
+  if (!symbolNote) throw new Error("Expected at least one Obsidian symbol note");
+  const symbolText = fs.readFileSync(path.join(tmp, ".semantic-kg/wiki/obsidian/symbols", symbolNote), "utf8");
+  for (const expected of ["Intelligence summary", "Source excerpt", "Neighborhood map", "Agent prompts"]) {
+    if (!symbolText.includes(expected)) throw new Error(`Obsidian symbol note missing section: ${expected}`);
+  }
   assertFile(".semantic-kg/enrichment/local-extract/manifest.json");
   assertFile("worked/smoke/review.md");
   assertFile(".graph-it/agent-rules/generic-graph-it.md");

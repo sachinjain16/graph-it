@@ -59,6 +59,7 @@ The vault includes:
 - stable note filenames with graph ID hashes
 - YAML frontmatter and `graph-it/*` tags
 - outbound links and backlinks per note
+- role summaries, source excerpts, relationship confidence, neighborhood diagrams, and agent prompts per note
 - `Agent Start Here.md`
 - `Graph-It Index.md`
 - `Graph Quality.md`

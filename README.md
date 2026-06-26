@@ -195,6 +195,7 @@ The vault includes:
 - `Graph Quality.md`
 - `Backlinks Index.md`
 - `MOCs/` by note type and semantic topic
+- rich note bodies with role summaries, source excerpts, relationship confidence, neighborhood diagrams, and agent prompts
 - stable note IDs, YAML frontmatter, tags, outbound links, and backlinks
 - a minimal `.obsidian` starter config
 

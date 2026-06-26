@@ -875,6 +875,72 @@ function renderProofMarkdown(p) {
 }
 
 function yamlValue(v) { return String(v ?? "").replace(/"/g, '\\"'); }
+function sourceExcerpt(n, maxChars = 1800) {
+  if (!n.path) return "";
+  const abs = path.join(ROOT, n.path);
+  if (!fs.existsSync(abs) || !fs.statSync(abs).isFile()) return "";
+  const ext = path.extname(abs).toLowerCase();
+  if (!TEXT_EXTS.has(ext) && ![".yaml", ".yml", ".csv"].includes(ext)) return "";
+  const lines = fs.readFileSync(abs, "utf8").split(/\r?\n/);
+  const start = Math.max(1, Number(n.line || 1) - 4);
+  const end = Math.min(lines.length, start + 22);
+  const excerpt = lines.slice(start - 1, end).map((line, i) => `${start + i}: ${line}`).join("\n");
+  return excerpt.length > maxChars ? `${excerpt.slice(0, maxChars)}\n...` : excerpt;
+}
+function nodeRole(n) {
+  const label = n.label || n.id;
+  if (n.kind === "topic") return `This is a semantic topic that groups related files, sections, symbols, and concepts around **${label}**.`;
+  if (n.kind === "component") return `This looks like a component or high-level code construct. Use it as an anchor for UI, workflow, or orchestration exploration.`;
+  if (n.kind === "symbol") return `This is a code symbol extracted from source. Use it to jump from graph-level context into implementation detail.`;
+  if (n.kind === "export") return `This export note captures a public surface from a module. It is useful for understanding API boundaries and reuse.`;
+  if (n.kind === "dependency") return `This dependency note captures an import/require relationship. It helps explain coupling and external module boundaries.`;
+  if (String(n.kind || "").includes("doc") || DOC_EXTS.has(n.ext)) return `This is a documentation node. Use it to understand intent, architecture, and narrative context.`;
+  if (String(n.kind || "").includes("file")) return `This file note is a source-level anchor in the repo graph. Use relationships and excerpts to decide whether to open the raw file.`;
+  return `This note represents a graph node extracted from the project.`;
+}
+function evidenceRollup(items) {
+  const counts = {};
+  for (const item of items) {
+    const evidence = item.edge?.evidence || "UNSPECIFIED";
+    counts[evidence] = (counts[evidence] || 0) + 1;
+  }
+  return Object.entries(counts).sort((a, b) => b[1] - a[1]).map(([k, v]) => `${k}: ${v}`).join(", ") || "No relationships";
+}
+function relationshipNarrative(outbound, inbound) {
+  const total = outbound.length + inbound.length;
+  if (!total) return "This node is currently isolated in the graph. Treat it as a candidate for more extraction or better topic mapping.";
+  const extracted = [...outbound, ...inbound].filter(x => x.edge?.evidence === "EXTRACTED").length;
+  const inferred = [...outbound, ...inbound].filter(x => x.edge?.evidence === "INFERRED").length;
+  const dominant = outbound.length >= inbound.length ? "outbound" : "inbound";
+  return `This node has **${total}** known relationship(s): **${outbound.length} outbound** and **${inbound.length} inbound**. Evidence mix: **${extracted} extracted**, **${inferred} inferred**. The ${dominant} side is stronger, so start there when navigating.`;
+}
+function suggestedQuestions(n, outbound, inbound) {
+  const label = n.label || n.id;
+  const qs = [
+    `Where is ${label} defined and what reads or references it?`,
+    `Which nearby nodes have EXTRACTED relationships to ${label}?`,
+    `What would change if ${label} moved or was renamed?`,
+  ];
+  if (outbound.some(x => x.edge?.type?.includes("IMPORT"))) qs.push(`Which dependencies shape ${label}?`);
+  if (inbound.length) qs.push(`Which files or symbols depend on ${label}?`);
+  if (n.semanticTags?.length) qs.push(`How does ${label} relate to ${n.semanticTags.slice(0, 3).join(", ")}?`);
+  return qs.slice(0, 5);
+}
+function mermaidNeighborhood(n, outbound, inbound) {
+  const edges = [...outbound.slice(0, 6).map(x => [n, x.node, x.edge]), ...inbound.slice(0, 6).map(x => [x.node, n, x.edge])];
+  if (!edges.length) return "";
+  const ids = new Map();
+  const nodeId = node => {
+    if (!ids.has(node.id)) ids.set(node.id, `N${ids.size + 1}`);
+    return ids.get(node.id);
+  };
+  const lines = ["```mermaid", "flowchart LR"];
+  for (const [from, to, edge] of edges) {
+    lines.push(`  ${nodeId(from)}["${String(from.label || from.id).replace(/"/g, "'").slice(0, 40)}"] -->|${String(edge.type || "RELATED").replace(/"/g, "'").slice(0, 24)}| ${nodeId(to)}["${String(to.label || to.id).replace(/"/g, "'").slice(0, 40)}"]`);
+  }
+  lines.push("```");
+  return lines.join("\n");
+}
 function obsidianFolder(n) {
   if (n.kind === "topic") return "concepts";
   if (n.kind === "doc" || DOC_EXTS.has(n.ext)) return "docs";
@@ -891,10 +957,15 @@ function obsidianNodeMarkdown(n, related, backlinks) {
   const tags = [...new Set([n.kind, ...(n.semanticTags || []).map(slug)].filter(Boolean))];
   const outbound = related.filter(x => x.node);
   const inbound = backlinks.filter(x => x.node);
-  return `---\ngraph_it_id: "${yamlValue(n.id)}"\ntype: "${yamlValue(n.kind)}"\nsource: "${yamlValue(n.path || "")}"\nline: ${Number(n.line || 0)}\ntags: [${tags.map(t => `"${yamlValue(obsidianTag(t))}"`).join(", ")}]\nevidence: "EXTRACTED"\n---\n\n# ${n.label || n.id}\n\n${n.summary || "No summary available."}\n\n${n.path ? `Source: \`${n.path}${n.line ? `:${n.line}` : ""}\`\n\n` : ""}## Outbound links\n\n${outbound.length ? outbound.slice(0, 30).map(({ edge, node }) => `- ${obsidianLink(node)} — ${edge.type} (${edge.evidence || "UNSPECIFIED"}${edge.confidence ? `, ${edge.confidence}` : ""})${edge.why ? ` — ${md(edge.why)}` : ""}`).join("\n") : "- None"}\n\n## Backlinks\n\n${inbound.length ? inbound.slice(0, 30).map(({ edge, node }) => `- ${obsidianLink(node)} — ${edge.type} (${edge.evidence || "UNSPECIFIED"})`).join("\n") : "- None"}\n\n## Graph-It queries\n\n- \`node tools/semantic-kg.mjs query "${String(n.label || n.id).replace(/"/g, '\\"')}"\`\n- \`node tools/semantic-kg.mjs impact "${String(n.label || n.id).replace(/"/g, '\\"')}"\`\n`;
+  const excerpt = sourceExcerpt(n);
+  const diagram = mermaidNeighborhood(n, outbound, inbound);
+  const questions = suggestedQuestions(n, outbound, inbound);
+  return `---\ngraph_it_id: "${yamlValue(n.id)}"\ntype: "${yamlValue(n.kind)}"\nsource: "${yamlValue(n.path || "")}"\nline: ${Number(n.line || 0)}\ntags: [${tags.map(t => `"${yamlValue(obsidianTag(t))}"`).join(", ")}]\nevidence: "EXTRACTED"\nrelationship_count: ${outbound.length + inbound.length}\n---\n\n# ${n.label || n.id}\n\n> [!summary] Why this note exists\n> ${nodeRole(n)}\n\n## Intelligence summary\n\n${n.summary || "No summary available."}\n\n${n.path ? `**Source:** \`${n.path}${n.line ? `:${n.line}` : ""}\`\n\n` : ""}**Relationship confidence:** ${relationshipNarrative(outbound, inbound)}\n\n**Evidence rollup:** ${evidenceRollup([...outbound, ...inbound])}\n\n${n.semanticTags?.length ? `**Semantic tags:** ${n.semanticTags.map(t => `#${obsidianTag(t)}`).join(" ")}\n\n` : ""}## Source excerpt\n\n${excerpt ? `\`\`\`text\n${excerpt}\n\`\`\`` : "_No local text excerpt available for this node._"}\n\n## Neighborhood map\n\n${diagram || "_No neighborhood diagram available._"}\n\n## Outbound links\n\n${outbound.length ? outbound.slice(0, 30).map(({ edge, node }) => `- ${obsidianLink(node)} — **${edge.type}** (${edge.evidence || "UNSPECIFIED"}${edge.confidence ? `, ${edge.confidence}` : ""})${edge.why ? ` — ${md(edge.why)}` : ""}`).join("\n") : "- None"}\n\n## Backlinks\n\n${inbound.length ? inbound.slice(0, 30).map(({ edge, node }) => `- ${obsidianLink(node)} — **${edge.type}** (${edge.evidence || "UNSPECIFIED"})`).join("\n") : "- None"}\n\n## Agent prompts\n\n${questions.map(q => `- ${q}`).join("\n")}\n\n## Graph-It commands\n\n- \`node tools/semantic-kg.mjs query "${String(n.label || n.id).replace(/"/g, '\\"')}"\`\n- \`node tools/semantic-kg.mjs impact "${String(n.label || n.id).replace(/"/g, '\\"')}"\`\n`;
 }
 function obsidianMocMarkdown(title, nodes, intro = "") {
-  return `---\ntype: "moc"\ntags: ["graph-it/moc"]\n---\n\n# ${title}\n\n${intro ? `${intro}\n\n` : ""}${nodes.length ? nodes.map(n => `- ${obsidianLink(n)}${n.path ? ` — \`${n.path}${n.line ? `:${n.line}` : ""}\`` : ""}`).join("\n") : "- No notes in this section."}\n`;
+  const byKind = [...groupBy(nodes, n => n.kind).entries()].sort((a, b) => b[1].length - a[1].length);
+  const top = nodes.slice(0, 12);
+  return `---\ntype: "moc"\ntags: ["graph-it/moc"]\nnode_count: ${nodes.length}\n---\n\n# ${title}\n\n${intro ? `${intro}\n\n` : ""}## Orientation\n\nThis MOC groups **${nodes.length}** Graph-It note(s). Use it as a curated doorway into this slice of the repo graph before opening raw files.\n\n${byKind.length ? `**Kind mix:** ${byKind.map(([kind, items]) => `${kind}: ${items.length}`).join(", ")}\n\n` : ""}## Best starting points\n\n${top.length ? top.map(n => `- ${obsidianLink(n)}${n.summary ? ` — ${md(n.summary).slice(0, 140)}` : ""}`).join("\n") : "- No notes in this section."}\n\n## All notes\n\n${nodes.length ? nodes.map(n => `- ${obsidianLink(n)}${n.path ? ` — \`${n.path}${n.line ? `:${n.line}` : ""}\`` : ""}`).join("\n") : "- No notes in this section."}\n\n## Suggested exploration\n\n- Start with the highest-level docs/components above.\n- Follow EXTRACTED backlinks before inferred topic links.\n- Use \`node tools/semantic-kg.mjs query --intent=docs "<topic>"\` when this MOC is too broad.\n`;
 }
 function obsidianStarterConfig(vault) {
   const obsidianDir = path.join(vault, ".obsidian");
@@ -937,10 +1008,10 @@ function obsidian() {
     const members = g.edges.filter(e => e.to === topic.id || e.from === topic.id).map(e => nodes.get(e.from === topic.id ? e.to : e.from)).filter(Boolean);
     fs.writeFileSync(path.join(vault, "MOCs", `${slug(topic.label)}.md`), obsidianMocMarkdown(`${topic.label} MOC`, [...new Set(members)].slice(0, 120), `Topic-centered view from Graph-It.`));
   }
-  fs.writeFileSync(path.join(vault, "Backlinks Index.md"), `---\ntype: "index"\ntags: ["graph-it/index", "graph-it/backlinks"]\n---\n\n# Backlinks Index\n\n${g.nodes.map(n => `## ${obsidianLink(n)}\n\n${(incoming.get(n.id) || []).length ? (incoming.get(n.id) || []).slice(0, 20).map(({ edge, node }) => `- ${obsidianLink(node)} — ${edge.type} (${edge.evidence || "UNSPECIFIED"})`).join("\n") : "- No backlinks"}\n`).join("\n")}`);
-  fs.writeFileSync(path.join(vault, "Agent Start Here.md"), `---\ntype: "agent-entry"\ntags: ["graph-it/agent", "graph-it/start"]\n---\n\n# Agent Start Here\n\nUse this vault as compact repo memory before opening raw files.\n\n1. Read [[Graph-It Index]].\n2. Check [[Graph Quality]].\n3. Use relevant MOCs under [[MOCs/index|MOCs]].\n4. Prefer notes with EXTRACTED relationships before using INFERRED links.\n\n## Useful local commands\n\n- \`node tools/semantic-kg.mjs query --intent=code "SymbolName"\`\n- \`node tools/semantic-kg.mjs query --intent=docs "architecture"\`\n- \`node tools/semantic-kg.mjs delta\`\n- \`node tools/semantic-kg.mjs quality\`\n`);
+  fs.writeFileSync(path.join(vault, "Backlinks Index.md"), `---\ntype: "index"\ntags: ["graph-it/index", "graph-it/backlinks"]\n---\n\n# Backlinks Index\n\nUse this page to find what depends on what. Prefer EXTRACTED backlinks for implementation work; treat INFERRED links as discovery hints.\n\n${g.nodes.map(n => `## ${obsidianLink(n)}\n\n${(incoming.get(n.id) || []).length ? (incoming.get(n.id) || []).slice(0, 20).map(({ edge, node }) => `- ${obsidianLink(node)} — **${edge.type}** (${edge.evidence || "UNSPECIFIED"})`).join("\n") : "- No backlinks"}\n`).join("\n")}`);
+  fs.writeFileSync(path.join(vault, "Agent Start Here.md"), `---\ntype: "agent-entry"\ntags: ["graph-it/agent", "graph-it/start"]\n---\n\n# Agent Start Here\n\n> [!important] Use this vault as compact repo memory before opening raw files.\n\n## Navigation contract\n\n1. Read [[Graph-It Index]] for graph health and top connected notes.\n2. Check [[Graph Quality]] before trusting inferred relationships.\n3. Use [[MOCs/index|MOCs]] to choose the right slice of the repo.\n4. Follow EXTRACTED backlinks first.\n5. Open raw source only after the graph identifies likely files or symbols.\n\n## Fast paths\n\n| Task | Start here |\n|---|---|\n| Understand architecture | [[MOCs/architecture|Architecture MOC]] then docs/components notes |\n| Find code surface | [[MOCs/symbols|Symbols MOC]] and query with \`--intent=code\` |\n| Audit docs alignment | [[Graph Quality]] and drift reports |\n| Explore dependencies | [[Backlinks Index]] and dependency notes |\n\n## Useful local commands\n\n- \`node tools/semantic-kg.mjs query --intent=code "SymbolName"\`\n- \`node tools/semantic-kg.mjs query --intent=docs "architecture"\`\n- \`node tools/semantic-kg.mjs delta\`\n- \`node tools/semantic-kg.mjs quality\`\n- \`node tools/semantic-kg.mjs proof "architecture" "security privacy"\`\n`);
   fs.writeFileSync(path.join(vault, "MOCs", "index.md"), `---\ntype: "moc-index"\ntags: ["graph-it/moc", "graph-it/index"]\n---\n\n# MOCs\n\n${fs.readdirSync(path.join(vault, "MOCs")).filter(f => f.endsWith(".md") && f !== "index.md").sort().map(f => `- [[MOCs/${f.replace(/\.md$/, "")}|${f.replace(/\.md$/, "")}]]`).join("\n")}\n`);
-  fs.writeFileSync(path.join(vault, "Graph-It Index.md"), `---\ntype: "index"\ntags: ["graph-it/index"]\n---\n\n# Graph-It Index\n\nScore: **${q.score}/100** (${q.grade})\n\n## Start\n\n- [[Agent Start Here]]\n- [[Graph Quality]]\n- [[Backlinks Index]]\n- [[MOCs/index|MOCs]]\n\n## Note folders\n\n- [[MOCs/concepts|Concepts]]\n- [[MOCs/docs|Docs]]\n- [[MOCs/files|Files]]\n- [[MOCs/symbols|Symbols]]\n- [[MOCs/artifacts|Artifacts]]\n\n## Top connected notes\n\n${topNodes.map(n => `- ${obsidianLink(n)} — degree ${degrees.get(n.id) || 0}`).join("\n")}\n`);
+  fs.writeFileSync(path.join(vault, "Graph-It Index.md"), `---\ntype: "index"\ntags: ["graph-it/index"]\nquality_score: ${q.score}\nquality_grade: "${q.grade}"\n---\n\n# Graph-It Index\n\n> [!summary] Vault health\n> Quality score: **${q.score}/100** (${q.grade}). This vault has **${g.stats.nodes} nodes**, **${g.stats.edges} edges**, and **${g.stats.files} indexed files**.\n\n## Start\n\n- [[Agent Start Here]] — recommended first note for agents and humans.\n- [[Graph Quality]] — trust, coverage, noise, and repair actions.\n- [[Backlinks Index]] — dependency and relationship navigation.\n- [[MOCs/index|MOCs]] — maps of content by type and topic.\n\n## Note folders\n\n- [[MOCs/concepts|Concepts]]\n- [[MOCs/docs|Docs]]\n- [[MOCs/files|Files]]\n- [[MOCs/symbols|Symbols]]\n- [[MOCs/artifacts|Artifacts]]\n\n## Top connected notes\n\n${topNodes.map(n => `- ${obsidianLink(n)} — degree ${degrees.get(n.id) || 0}${n.summary ? ` — ${md(n.summary).slice(0, 120)}` : ""}`).join("\n")}\n\n## Suggested graph questions\n\n- What are the highest-confidence architecture entry points?\n- Which docs or symbols are isolated and need better linking?\n- Which nodes changed most since the previous build?\n- Which code symbols have the strongest relationship neighborhoods?\n`);
   fs.writeFileSync(path.join(vault, "Graph Quality.md"), renderQualityMarkdown(q));
   console.log(`Obsidian vault exported to ${path.relative(ROOT, vault)}`);
 }
