@@ -24,6 +24,7 @@ Preferred implementation shape:
   - `kg:build` or equivalent build command
   - `kg:stats`
   - `kg:query -- "terms"`
+  - `kg:pack -- --intent=code "SymbolName"` for Headroom-style graph context packing before handing context to an agent
   - `kg:query -- --intent=code "SymbolName"` for exact-symbol navigation
   - `kg:query -- --intent=docs "release phrase"` for docs/release-note lookup
   - `kg:impact -- "A"` for likely code/docs touchpoints and validation hints
@@ -40,7 +41,7 @@ Preferred implementation shape:
   - `kg:watch` for refreshing graph/wiki/viewer artifacts during active editing
   - `kg:hook:install` for installing a managed post-commit hook that refreshes local graph artifacts
   - `kg:bootstrap` for installing Graph-It into another repo with safe local defaults
-  - `kg:mcp` for exposing graph query/path/stats/node/neighborhood/build over MCP stdio
+  - `kg:mcp` for exposing graph query/pack/path/stats/node/neighborhood/build over MCP stdio
   - `kg:mcp:config` for generating local MCP client snippets and optional graph.stats/graph.delta smoke checks
   - optional `kg:path "A" "B"`
 - Add the generated graph output directory to `.gitignore` unless the user explicitly wants checked-in graph artifacts.
@@ -69,16 +70,17 @@ Workflow:
 12. Run `agent-rules all` when the target repo should carry query-first instructions for common agent clients.
 13. Run `examples --public` only for non-confidential or already-reviewed projects, then review before publishing.
 14. Compare query output KB against canonical raw files referenced by the query. Save the results to `.semantic-kg/baseline.json` or the project-specific graph folder.
-15. Tighten noisy topic aliases and query scoring if broad words dominate results.
-16. Document the workflow and graph stats.
-17. Save a user/project memory when appropriate so future sessions use the graph first.
+15. Run `pack` for graph hits that would otherwise become large raw context; use live/graph/offloaded buckets before handing context to an agent.
+16. Tighten noisy topic aliases and query scoring if broad words dominate results.
+17. Document the workflow and graph stats.
+18. Save a user/project memory when appropriate so future sessions use the graph first.
 
 For colleagues or reusable delivery:
 - Present it as a local project tool plus a Clawpilot skill workflow.
 - Make it privacy-safe: no external content upload by default.
 - Make it easy to extend by editing a `SEMANTIC_TOPICS` array or config object.
 - Explain that deterministic extraction is not the same as full LLM understanding, but often provides 50x-300x less context for navigation tasks.
-- Prefer current Graph-It behavior when creating or updating templates: enterprise bootstrap/install, package CLI aliases, trust docs, JS/TS structural extraction, intent-aware ranking, exact-symbol prioritization, next-read line bundles, impact mode, drift report artifacts, delta reports, quality score, export pack, proof pack, local extraction sidecars, sanitized examples, agent-rule packs, agent wiki export, community reporting, watch/hook refresh, MCP server mode, MCP config helper, and baseline artifacts.
+- Prefer current Graph-It behavior when creating or updating templates: enterprise bootstrap/install, package CLI aliases, trust docs, JS/TS structural extraction, intent-aware ranking, exact-symbol prioritization, next-read line bundles, context pack, impact mode, drift report artifacts, delta reports, quality score, export pack, proof pack, local extraction sidecars, sanitized examples, agent-rule packs, agent wiki export, community reporting, watch/hook refresh, MCP server mode, MCP config helper, and baseline artifacts.
 
 When operating in a project that already has a custom graph tool:
 - Preserve that project's existing graph tool and output directory unless the user asks to migrate it.

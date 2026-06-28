@@ -70,6 +70,7 @@ Run Graph-It in this repo:
 npm run kg:build
 npm run kg:quality
 npm run kg:query -- --intent=code "bootstrap"
+npm run kg:pack -- --intent=code "bootstrap"
 npm run kg:proof -- "architecture" "security privacy" "install"
 npm run kg:mcp:config -- --smoke-test
 ```
@@ -101,6 +102,7 @@ npm run kg:mcp:config -- --smoke-test
 | `stats` | Print graph counts. |
 | `query --intent=code "Symbol"` | Find code symbols/components and next-read ranges. |
 | `query --intent=docs "topic"` | Find docs, sections, and architecture notes. |
+| `pack --intent=code "Symbol"` | Pack ranked graph hits into live/graph/compressed/offloaded buckets before giving context to an agent. |
 | `impact "Symbol"` | Find likely code/docs touchpoints. |
 | `drift` | Write docs/narrative drift reports. |
 | `delta` | Compare current and previous graph snapshots. |
@@ -142,6 +144,7 @@ Graph-It exposes these local tools over stdio:
 
 - `graph.stats`
 - `graph.query`
+- `graph.pack`
 - `graph.path`
 - `graph.node`
 - `graph.neighborhood`
@@ -166,6 +169,28 @@ Graph-It uses dependency-free deterministic extraction by default:
 - optional local text sidecars for text-like files, basic embedded PDF text, and ZIP/XML `.docx`, `.pptx`, `.xlsx`
 
 This is intentionally not a cloud RAG pipeline. Optional richer OCR, PDF, Office, AST, or model adapters should remain explicit and reviewable.
+
+## Context Pack
+
+Graph-It includes a lightweight Headroom-inspired context packer. It does not proxy
+model traffic or call external services. It takes ranked graph hits and returns a
+small agent-ready context pack:
+
+```powershell
+npm run kg:pack -- --intent=docs --budget=1600 "architecture skills memory"
+```
+
+Buckets:
+
+| Bucket | Purpose |
+|---|---|
+| `live` | Current query/intent, kept uncompressed |
+| `graph` | Top ranked graph hits with anchors and next-read ranges |
+| `compressed` | Reserved for noisy artifacts in downstream integrations |
+| `offloaded` | Lower-ranked hits to reload only if needed |
+
+The command writes `.semantic-kg/context-pack.json` with estimated original tokens,
+packed tokens, compression ratio, retained anchors, risk flags, and recommendations.
 
 ## Trust and privacy
 

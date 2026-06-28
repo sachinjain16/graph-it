@@ -53,8 +53,9 @@ const STOP = new Set(["the", "and", "for", "with", "this", "that", "from", "into
 const PACKAGE_SCRIPTS = {
   "kg:build": "node tools/semantic-kg.mjs build",
   "kg:stats": "node tools/semantic-kg.mjs stats",
-  "kg:query": "node tools/semantic-kg.mjs query",
-  "kg:impact": "node tools/semantic-kg.mjs impact",
+    "kg:query": "node tools/semantic-kg.mjs query",
+    "kg:pack": "node tools/semantic-kg.mjs pack",
+    "kg:impact": "node tools/semantic-kg.mjs impact",
   "kg:drift": "node tools/semantic-kg.mjs drift",
   "kg:drift:report": "node tools/semantic-kg.mjs drift",
   "kg:delta": "node tools/semantic-kg.mjs delta",
@@ -85,6 +86,7 @@ Usage:
   node tools/semantic-kg.mjs build [--include-generated]
   node tools/semantic-kg.mjs stats
   node tools/semantic-kg.mjs query [--intent=code|docs|media|all] "terms"
+  node tools/semantic-kg.mjs pack [--intent=code|docs|media|all] [--budget=1600] "terms"
   node tools/semantic-kg.mjs impact "SymbolOrFile"
   node tools/semantic-kg.mjs drift
   node tools/semantic-kg.mjs delta
@@ -268,7 +270,7 @@ function refreshGeneratedArtifacts({ wikiOutput = true, viewerOutput = true } = 
 function load() { if (!fs.existsSync(GRAPH_PATH)) throw new Error("Graph not found. Run build first."); return JSON.parse(fs.readFileSync(GRAPH_PATH, "utf8")); }
 function adj(g) { const nodes = new Map(g.nodes.map(n => [n.id, n])); const a = new Map(); for (const e of g.edges) { const f = nodes.get(e.from), t = nodes.get(e.to); if (!f || !t) continue; if (!a.has(e.from)) a.set(e.from, []); if (!a.has(e.to)) a.set(e.to, []); a.get(e.from).push({ dir: "out", type: e.type, node: t }); a.get(e.to).push({ dir: "in", type: e.type, node: f }); } return a; }
 function parseQueryArgs(args) {
-  const opts = { intent: "auto", limit: 12 };
+  const opts = { intent: "auto", limit: 12, budget: 1600 };
   const rest = [];
   for (const arg of args) {
     if (arg.startsWith("--intent=")) opts.intent = arg.slice("--intent=".length).toLowerCase();
@@ -276,6 +278,7 @@ function parseQueryArgs(args) {
     else if (arg === "--docs") opts.intent = "docs";
     else if (arg === "--media") opts.intent = "media";
     else if (arg.startsWith("--limit=")) opts.limit = Math.max(1, Math.min(30, Number(arg.slice("--limit=".length)) || 12));
+    else if (arg.startsWith("--budget=")) opts.budget = Math.max(200, Math.min(20000, Number(arg.slice("--budget=".length)) || 1600));
     else rest.push(arg);
   }
   opts.q = rest.join(" ").trim();
@@ -406,6 +409,99 @@ function query(args) {
     for (const nb of hit.neighbors) console.log(`  ${nb.direction === "out" ? "->" : "<-"} ${nb.type} ${nb.node.kind}:${nb.node.label}${nb.node.path ? ` (${nodeLocation(nb.node)})` : ""}`);
     if (hit.nextReads.length) { console.log("  Next reads:"); for (const r of hit.nextReads) console.log(`    - ${r}`); }
   }
+}
+function estimateTokens(text) { return Math.max(1, Math.ceil(Buffer.byteLength(String(text || ""), "utf8") / 4)); }
+function packAnchors(text) {
+  const anchors = new Set();
+  const source = String(text || "");
+  for (const rx of [
+    /\b[A-Z][A-Za-z0-9]+(?:Service|Client|Provider|Router|Controller|Store|Agent|Skill|Graph|Pack)\b/g,
+    /\b(?:TODO|FIXME|ERROR|WARN|FAILED|Exception|Traceback|Security|Auth|Token|Secret)\b/g,
+    /(?:src|docs|skills|tests|scripts|tools|crates)\/[A-Za-z0-9_.\/-]+/g,
+  ]) for (const m of source.matchAll(rx)) anchors.add(m[0]);
+  return [...anchors].slice(0, 8);
+}
+function packRisks(text, kind) {
+  const risks = [];
+  if (/secret|token|password|api[_-]?key/i.test(text)) risks.push("possible-secret");
+  if (/error|failed|exception|traceback/i.test(text)) risks.push("error-signal");
+  if (kind === "code_file" || kind === "symbol" || kind === "component") risks.push("code-context");
+  return risks;
+}
+function packHit(hit, index, perItemBudget) {
+  const n = hit.node || {};
+  const raw = [
+    `${n.kind || "node"}: ${n.label || n.id}`,
+    n.path ? `location: ${nodeLocation(n)}` : "",
+    n.summary || "",
+    hit.nextReads?.length ? `next reads: ${hit.nextReads.join("; ")}` : "",
+    hit.neighbors?.length ? `neighbors: ${hit.neighbors.slice(0, 5).map(nb => `${nb.type} ${nb.node?.kind}:${nb.node?.label}`).join("; ")}` : "",
+  ].filter(Boolean).join("\n");
+  const bucket = index < 5 ? "graph" : "offloaded";
+  const anchors = packAnchors(raw);
+  const packedContent = bucket === "offloaded"
+    ? `Offloaded graph hit: ${n.label || n.id}. Reload if needed.`
+    : [anchors.length ? `Anchors: ${anchors.join(", ")}` : "", raw].filter(Boolean).join("\n").slice(0, perItemBudget * 4);
+  return {
+    id: n.id || `hit-${index}`,
+    title: n.label || n.id || `hit-${index}`,
+    bucket,
+    kind: n.kind || "graph",
+    originalTokens: estimateTokens(raw),
+    packedTokens: estimateTokens(packedContent),
+    packedContent,
+    retainedAnchors: anchors,
+    riskFlags: packRisks(raw, n.kind),
+    nextReads: hit.nextReads || [],
+  };
+}
+function packResult(args) {
+  const opts = Array.isArray(args) ? parseQueryArgs(args) : { q: String(args?.q || args?.query || ""), intent: args?.intent || "auto", limit: args?.limit || 12, budget: args?.budget || 1600 };
+  const budget = opts.budget || 1600;
+  const queryPack = queryResult({ query: opts.q, intent: opts.intent || "auto", limit: opts.limit || 12 });
+  const live = {
+    id: "live:intent",
+    title: "Live intent",
+    bucket: "live",
+    kind: "intent",
+    originalTokens: estimateTokens(opts.q),
+    packedTokens: estimateTokens(opts.q),
+    packedContent: opts.q,
+    retainedAnchors: packAnchors(opts.q),
+    riskFlags: [],
+    nextReads: [],
+  };
+  const perItemBudget = Math.max(120, Math.floor(budget / Math.max(1, queryPack.hits.length + 1)));
+  const items = [live, ...queryPack.hits.map((hit, index) => packHit(hit, index, perItemBudget))];
+  const buckets = { live: [], pinned: [], graph: [], compressed: [], offloaded: [] };
+  for (const item of items) buckets[item.bucket].push(item);
+  const originalTokens = items.reduce((sum, item) => sum + item.originalTokens, 0);
+  const packedTokens = items.reduce((sum, item) => sum + item.packedTokens, 0);
+  const result = {
+    generatedAt: new Date().toISOString(),
+    query: opts.q,
+    intent: queryPack.intent,
+    budgetTokens: budget,
+    originalTokens,
+    packedTokens,
+    compressionRatio: originalTokens ? Math.round((packedTokens / originalTokens) * 100) / 100 : 1,
+    estimatedSavings: Math.max(0, originalTokens - packedTokens),
+    buckets,
+    recommendations: [
+      "Keep live intent uncompressed.",
+      "Use graph bucket hits before opening raw files.",
+      "Offload low-ranked hits until the agent needs them.",
+      "Treat risk flags as prompts to inspect raw source before acting.",
+    ],
+  };
+  ensureDir(OUT_DIR);
+  fs.writeFileSync(path.join(OUT_DIR, "context-pack.json"), JSON.stringify(result, null, 2));
+  return result;
+}
+function pack(args) {
+  const result = packResult(args);
+  console.log(JSON.stringify(result, null, 2));
+  console.log(`Wrote ${path.relative(ROOT, path.join(OUT_DIR, "context-pack.json"))}`);
 }
 function findNode(g, needle) {
   const q = String(needle || "").toLowerCase();
@@ -2263,6 +2359,21 @@ const MCP_TOOLS = [
     },
   },
   {
+    name: "graph.pack",
+    description: "Pack ranked graph query hits into live, graph, compressed, and offloaded buckets before handing context to an agent.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        query: { type: "string", description: "Search terms, symbol name, file path fragment, or documentation phrase." },
+        intent: { type: "string", enum: ["auto", "code", "docs", "media", "all"], description: "Optional ranking intent." },
+        limit: { type: "number", minimum: 1, maximum: 30, description: "Maximum ranked hits to pack." },
+        budget: { type: "number", minimum: 200, maximum: 20000, description: "Approximate token budget for packed context." },
+      },
+      required: ["query"],
+      additionalProperties: false,
+    },
+  },
+  {
     name: "graph.path",
     description: "Find a shortest relationship path between two graph nodes resolved by id, label, symbol, or path fragment.",
     inputSchema: {
@@ -2352,6 +2463,7 @@ function mcpContent(value) {
 function callMcpTool(name, args = {}) {
   if (name === "graph.stats") return mcpContent(statsResult());
   if (name === "graph.query") return mcpContent(queryResult({ query: args.query, intent: args.intent || "auto", limit: args.limit || 12 }));
+  if (name === "graph.pack") return mcpContent(packResult({ query: args.query, intent: args.intent || "auto", limit: args.limit || 12, budget: args.budget || 1600 }));
   if (name === "graph.path") return mcpContent(pathResult(args.from, args.to));
   if (name === "graph.node") return mcpContent(nodeResult(args.query));
   if (name === "graph.neighborhood") return mcpContent(neighborhoodResult(args.query, args.depth || 1, args.limit || 40));
@@ -2449,6 +2561,7 @@ if (!cmd || cmd === "help" || cmd === "--help") usage();
 else if (cmd === "build") build();
 else if (cmd === "stats") stats();
 else if (cmd === "query") query(args);
+else if (cmd === "pack") pack(args);
 else if (cmd === "impact") impact(args.join(" "));
 else if (cmd === "drift") drift();
 else if (cmd === "delta") delta();
