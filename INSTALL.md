@@ -47,6 +47,31 @@ Bootstrap does the following:
 - optionally installs a managed post-commit hook with `--with-hook`
 - avoids replacing an existing different Graph-It runtime unless `--force` is passed
 
+## Optional companion: Memorize-It
+
+Graph-It works on its own. Memorize-It is a separate optional companion for long-term session memory and repo-local learnings.
+
+Use Graph-It for query-first repo navigation:
+
+```powershell
+graph-it install --project ..\target-project --build
+```
+
+Then optionally add Memorize-It for prior-work context:
+
+```powershell
+cd ..\target-project
+ai-memory install-hooks --project .
+ai-memory learn --scope local --project . --category convention --text "<first repo convention>"
+```
+
+Recommended default agent rhythm:
+
+```powershell
+graph-it query --intent=code "<symbol or feature>"
+ai-memory inject --scope both --project . --query "<new task>" --max-chars 4000
+```
+
 ## Configure AI coding agents
 
 From the target repo:

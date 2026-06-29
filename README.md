@@ -39,6 +39,30 @@ The core idea is simple: **query the graph first, then read only the files and l
 | Trust but verify graph output | Evidence labels, quality score, proof packs, delta reports, and drift reports. |
 | Bring it to another repo fast | `graph-it install --project ..\target-repo --build` or repo-local bootstrap. |
 
+## Optional companion: Memorize-It
+
+Memorize-It is a separate optional tool and repo; it is not required by Graph-It and is not bundled with it. The recommended best-practice pairing is:
+
+| Tool | Owns | Use it for |
+|---|---|---|
+| **Graph-It** | Repo map, semantic graph, code/docs navigation | "Where is this thing? What files matter?" |
+| **Memorize-It** | Session memory, learnings, prior-work context | "What did we learn last time? What should the agent remember?" |
+
+Use both when you want an agent-ready repo:
+
+```powershell
+graph-it install --project . --build
+ai-memory install-hooks --project .
+ai-memory learn --scope local --project . --category convention --text "<first repo convention>"
+```
+
+Default agent rhythm:
+
+```powershell
+graph-it query --intent=code "<symbol or feature>"
+ai-memory inject --scope both --project . --query "<new task>" --max-chars 4000
+```
+
 ## What it builds
 
 ```text
