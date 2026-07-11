@@ -18,7 +18,7 @@ walk project
   -> extract deterministic structure
   -> add local topic relationships
   -> write graph/cache
-  -> report/query/export/proof
+  -> report/query/export/proof/freshness
   -> serve graph through MCP stdio
 ```
 
@@ -30,7 +30,7 @@ walk project
 | `graph-it` | Package CLI alias for the same runtime. |
 | `semantic-kg` | Compatibility CLI alias. |
 | npm `kg:*` scripts | Repo-local command shortcuts. |
-| MCP stdio server | Agent tool interface for graph query/path/node/build/delta/export/proof/config. |
+| MCP stdio server | Agent tool interface for graph query/path/node/build/delta/freshness/export/proof/config. |
 | Agent-rule packs | Query-first instructions for agents that do not use MCP. |
 
 ## Generated artifacts
@@ -40,6 +40,8 @@ walk project
 | `.semantic-kg/graph.json` | Primary local graph for query, impact, path, and MCP tools. |
 | `.semantic-kg/cache/` | SHA-based local cache records. |
 | `.semantic-kg/quality.{json,md}` | Graph health score, issues, and repair plan. |
+| `.semantic-kg/freshness.json` | Auto-refresh state and changed-file diff. |
+| `.semantic-kg/session-start.md` | Dev-session kickoff prompt with Graph-It guardrails. |
 | `.semantic-kg/delta-report.{json,md}` | Current-vs-previous graph changes. |
 | `.semantic-kg/drift-report.{json,md}` | Docs/narrative drift checks. |
 | `.semantic-kg/proof/` | Local proof packs with quality and query-compression evidence. |
@@ -73,6 +75,14 @@ Agents should prefer `EXTRACTED` relationships for high-confidence navigation an
 5. optionally install the managed post-commit hook
 
 Existing different runtimes are not overwritten unless `--force` is passed.
+
+## Auto-refresh and freshness
+
+`auto` is a daemon-lite local updater for active development. It re-walks tracked files on an interval, detects added/changed/removed files, refreshes graph artifacts after a debounce window, and writes `.semantic-kg/freshness.json`.
+
+`graph.freshness` exposes the same status over MCP so agents can check whether graph context is fresh before relying on it.
+
+`session-prompt` writes `.semantic-kg/session-start.md`, a reusable kickoff prompt with local/confidential-work guardrails, graph-first navigation rules, and validation expectations.
 
 ## Extension points
 

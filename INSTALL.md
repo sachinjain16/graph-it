@@ -20,6 +20,7 @@ No external services, model keys, database servers, or native dependencies are r
 npm run check
 npm test
 npm run kg:build
+npm run kg:auto -- --once
 npm run kg:quality
 npm run kg:mcp:config -- --smoke-test
 ```
@@ -98,6 +99,9 @@ Review generated agent rules before copying them into client-specific instructio
 
 ```powershell
 npm run kg:build
+npm run kg:auto -- --once
+npm run kg:freshness
+npm run kg:session-prompt -- --print
 npm run kg:quality
 npm run kg:proof -- "architecture" "security privacy" "install"
 npm run kg:query -- --intent=code "TargetSymbol"
@@ -107,6 +111,7 @@ npm run kg:delta
 Optional expansion commands:
 
 ```powershell
+npm run kg:auto
 npm run kg:export -- all
 npm run kg:enrich -- --provider local --extract-text
 npm run kg:examples -- --name target-project --public

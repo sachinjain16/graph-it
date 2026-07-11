@@ -30,6 +30,8 @@ Review before sharing or committing:
 - `.semantic-kg/proof/`
 - `.semantic-kg/wiki/`
 - `.semantic-kg/graph.html`
+- `.semantic-kg/freshness.json`
+- `.semantic-kg/session-start.md`
 - `worked/<name>/`
 
 Use `examples --public` only as a scaffold. Human review is still required before publishing.
@@ -67,6 +69,10 @@ Future adapters should:
 `agent-rules` writes local instruction packs under `.graph-it/agent-rules/`. Review before copying them into assistant-specific config locations.
 
 `mcp` exposes local graph tools over stdio. The MCP host controls what tool results are shown or sent elsewhere; use clients that respect your data boundary.
+
+## Auto-refresh guardrails
+
+`auto` watches local files and refreshes local artifacts only. It does not upload graph state or file contents. `session-prompt` writes a local prompt that reminds agents to check freshness, prefer evidence-labeled graph context, and avoid sharing generated artifacts without review.
 
 ## Reporting issues
 

@@ -15,6 +15,8 @@ const DELTA_REPORT_JSON = path.join(OUT_DIR, "delta-report.json");
 const DELTA_REPORT_MD = path.join(OUT_DIR, "delta-report.md");
 const QUALITY_JSON = path.join(OUT_DIR, "quality.json");
 const QUALITY_MD = path.join(OUT_DIR, "quality.md");
+const FRESHNESS_JSON = path.join(OUT_DIR, "freshness.json");
+const SESSION_PROMPT_MD = path.join(OUT_DIR, "session-start.md");
 const CACHE_DIR = path.join(OUT_DIR, "cache");
 const WIKI_DIR = path.join(OUT_DIR, "wiki");
 const EXPORT_DIR = path.join(OUT_DIR, "exports");
@@ -68,7 +70,10 @@ const PACKAGE_SCRIPTS = {
   "kg:agent-rules": "node tools/semantic-kg.mjs agent-rules",
   "kg:obsidian": "node tools/semantic-kg.mjs obsidian",
   "kg:ingest": "node tools/semantic-kg.mjs ingest",
-  "kg:enrich": "node tools/semantic-kg.mjs enrich",
+    "kg:enrich": "node tools/semantic-kg.mjs enrich",
+    "kg:auto": "node tools/semantic-kg.mjs auto",
+    "kg:freshness": "node tools/semantic-kg.mjs freshness",
+    "kg:session-prompt": "node tools/semantic-kg.mjs session-prompt",
   "kg:watch": "node tools/semantic-kg.mjs watch",
   "kg:hook:install": "node tools/semantic-kg.mjs hook install",
   "kg:bootstrap": "node tools/semantic-kg.mjs bootstrap",
@@ -100,6 +105,9 @@ Usage:
   node tools/semantic-kg.mjs obsidian
   node tools/semantic-kg.mjs ingest <file-or-folder> [...]
   node tools/semantic-kg.mjs enrich [--provider local] [--extract-text] [--limit=50]
+  node tools/semantic-kg.mjs auto [--once] [--interval=1500] [--debounce=500] [--no-quality] [--no-wiki] [--no-viewer] [--no-obsidian]
+  node tools/semantic-kg.mjs freshness
+  node tools/semantic-kg.mjs session-prompt [--print]
   node tools/semantic-kg.mjs watch
   node tools/semantic-kg.mjs hook install
   node tools/semantic-kg.mjs bootstrap [target-dir] [--with-hook] [--build] [--force]
@@ -2009,17 +2017,86 @@ function parseWatchArgs(args) {
   }
   return opts;
 }
-function trackedFilesSnapshot() {
-  const files = walk(ROOT)
+function trackedFileRecords() {
+  return walk(ROOT)
     .filter(abs => {
       const ext = path.extname(abs).toLowerCase();
       return TEXT_EXTS.has(ext) || IMAGE_EXTS.has(ext) || PDF_EXTS.has(ext) || VIDEO_EXTS.has(ext) || ARCHIVE_EXTS.has(ext);
     })
-    .sort((a, b) => a.localeCompare(b));
-  return files.map(abs => {
+    .sort((a, b) => a.localeCompare(b))
+    .map(abs => {
     const st = fs.statSync(abs);
-    return `${rel(abs)}:${st.size}:${Math.trunc(st.mtimeMs)}`;
-  }).join("\n");
+    return { path: rel(abs), size: st.size, mtimeMs: Math.trunc(st.mtimeMs), ext: path.extname(abs).toLowerCase() || "none" };
+  });
+}
+function trackedFilesSnapshot() {
+  return trackedFileRecords().map(r => `${r.path}:${r.size}:${r.mtimeMs}`).join("\n");
+}
+function snapshotMap(records = trackedFileRecords()) {
+  return new Map(records.map(r => [r.path, r]));
+}
+function diffSnapshots(prev, next) {
+  const added = [];
+  const removed = [];
+  const changed = [];
+  for (const [p, n] of next.entries()) {
+    const old = prev.get(p);
+    if (!old) added.push(p);
+    else if (old.size !== n.size || old.mtimeMs !== n.mtimeMs) changed.push(p);
+  }
+  for (const p of prev.keys()) if (!next.has(p)) removed.push(p);
+  const removedBySize = new Map();
+  for (const p of removed) {
+    const r = prev.get(p);
+    const key = `${r.size}:${r.ext}`;
+    if (!removedBySize.has(key)) removedBySize.set(key, []);
+    removedBySize.get(key).push(p);
+  }
+  const possibleRenames = [];
+  for (const p of added) {
+    const r = next.get(p);
+    const key = `${r.size}:${r.ext}`;
+    const candidates = removedBySize.get(key) || [];
+    if (candidates.length) possibleRenames.push({ from: candidates.shift(), to: p });
+  }
+  return { added, changed, removed, possibleRenames, totalChanged: added.length + changed.length + removed.length };
+}
+function writeFreshness({ status, reason, diff, refresh = {}, records = trackedFileRecords() }) {
+  ensureDir(OUT_DIR);
+  const payload = {
+    generatedAt: new Date().toISOString(),
+    status,
+    reason,
+    graphExists: fs.existsSync(GRAPH_PATH),
+    graphPath: path.relative(ROOT, GRAPH_PATH),
+    trackedFiles: records.length,
+    records,
+    diff: diff || { added: [], changed: [], removed: [], possibleRenames: [], totalChanged: 0 },
+    refresh,
+  };
+  fs.writeFileSync(FRESHNESS_JSON, JSON.stringify(payload, null, 2));
+  return payload;
+}
+function freshnessResult() {
+  const records = trackedFileRecords();
+  const current = snapshotMap(records);
+  const last = fs.existsSync(FRESHNESS_JSON) ? JSON.parse(fs.readFileSync(FRESHNESS_JSON, "utf8")) : null;
+  const graphExists = fs.existsSync(GRAPH_PATH);
+  if (!last) return { status: graphExists ? "unknown" : "missing", graphExists, message: graphExists ? "No freshness record found. Run kg:auto --once or kg:build." : "Graph artifact is missing. Run kg:build.", trackedFiles: records.length };
+  const previousRecords = new Map((last.records || []).map(r => [r.path, r]));
+  const diff = previousRecords.size ? diffSnapshots(previousRecords, current) : { added: [], changed: [], removed: [], possibleRenames: [], totalChanged: 0 };
+  return {
+    status: diff.totalChanged ? "stale" : last.status || "fresh",
+    graphExists,
+    freshnessPath: path.relative(ROOT, FRESHNESS_JSON),
+    lastGeneratedAt: last.generatedAt,
+    trackedFiles: records.length,
+    diff,
+    message: diff.totalChanged ? "Tracked files changed after the last auto refresh." : "Graph-It freshness record matches tracked files.",
+  };
+}
+function freshness() {
+  console.log(JSON.stringify(freshnessResult(), null, 2));
 }
 function watch(args) {
   const opts = parseWatchArgs(args);
@@ -2061,6 +2138,119 @@ function watch(args) {
   refreshGeneratedArtifacts({ wikiOutput: opts.wikiOutput, viewerOutput: opts.viewerOutput });
   console.log(`Watching for changes every ${opts.intervalMs}ms. Press Ctrl+C to stop.`);
   setInterval(check, opts.intervalMs);
+}
+function parseAutoArgs(args) {
+  const opts = { intervalMs: 1500, debounceMs: 500, once: false, quality: true, wiki: true, viewer: true, obsidian: true, proof: false };
+  for (const arg of args) {
+    if (arg === "--once") opts.once = true;
+    else if (arg.startsWith("--interval=")) opts.intervalMs = Math.max(250, Number(arg.slice("--interval=".length)) || opts.intervalMs);
+    else if (arg.startsWith("--debounce=")) opts.debounceMs = Math.max(100, Number(arg.slice("--debounce=".length)) || opts.debounceMs);
+    else if (arg === "--no-quality") opts.quality = false;
+    else if (arg === "--no-wiki") opts.wiki = false;
+    else if (arg === "--no-viewer") opts.viewer = false;
+    else if (arg === "--no-obsidian") opts.obsidian = false;
+    else if (arg === "--proof") opts.proof = true;
+    else if (arg) throw new Error(`Unknown auto option: ${arg}`);
+  }
+  return opts;
+}
+function autoRefresh(opts, diff, records) {
+  const startedAt = new Date().toISOString();
+  const outputs = [];
+  build(); outputs.push(path.relative(ROOT, GRAPH_PATH));
+  delta(); outputs.push(path.relative(ROOT, DELTA_REPORT_MD));
+  if (opts.quality) { quality(); outputs.push(path.relative(ROOT, QUALITY_MD)); }
+  if (opts.wiki) { wiki(); outputs.push(path.relative(ROOT, WIKI_DIR)); }
+  if (opts.viewer) { viewer(); outputs.push(path.relative(ROOT, VIEWER_PATH)); }
+  if (opts.obsidian) { obsidian(); outputs.push(path.relative(ROOT, path.join(WIKI_DIR, "obsidian"))); }
+  if (opts.proof) { proof(["architecture", "security privacy", "agent rules"]); outputs.push(path.relative(ROOT, path.join(PROOF_DIR, "proof.md"))); }
+  return writeFreshness({
+    status: "fresh",
+    reason: diff?.totalChanged ? "auto-refresh after tracked file changes" : "auto-refresh baseline",
+    diff,
+    records,
+    refresh: { startedAt, completedAt: new Date().toISOString(), outputs, options: opts },
+  });
+}
+function auto(args) {
+  const opts = parseAutoArgs(args);
+  let previous = snapshotMap();
+  const initialDiff = { added: [...previous.keys()], changed: [], removed: [], possibleRenames: [], totalChanged: previous.size };
+  console.log("Graph-It auto mode: refreshing baseline artifacts...");
+  autoRefresh(opts, initialDiff, [...previous.values()]);
+  if (opts.once) return;
+  let timer = null;
+  let running = false;
+  const schedule = diff => {
+    clearTimeout(timer);
+    timer = setTimeout(() => {
+      if (running) return;
+      running = true;
+      try {
+        const records = trackedFileRecords();
+        console.log(`\nGraph-It auto refresh: ${diff.added.length} added, ${diff.changed.length} changed, ${diff.removed.length} removed.`);
+        autoRefresh(opts, diff, records);
+        previous = snapshotMap(records);
+      } catch (err) {
+        writeFreshness({ status: "error", reason: err.message, diff, records: trackedFileRecords(), refresh: { failedAt: new Date().toISOString() } });
+        console.error(`Graph-It auto refresh failed: ${err.message}`);
+      } finally {
+        running = false;
+      }
+    }, opts.debounceMs);
+  };
+  console.log(`Graph-It auto mode active. interval=${opts.intervalMs}ms debounce=${opts.debounceMs}ms. Press Ctrl+C to stop.`);
+  setInterval(() => {
+    const next = snapshotMap();
+    const diff = diffSnapshots(previous, next);
+    if (diff.totalChanged) schedule(diff);
+  }, opts.intervalMs);
+}
+function sessionPromptText() {
+  const fresh = freshnessResult();
+  return `# Graph-It Dev Session Start
+
+Use this prompt at the start of an AI coding-agent session in this repo.
+
+## Guardrails
+
+1. Treat the repo as local/confidential. Do not upload source, generated graph artifacts, or private docs.
+2. Check Graph-It freshness before broad file reads.
+3. Prefer EXTRACTED relationships; use INFERRED and AMBIGUOUS links as discovery hints only.
+4. Use compact graph context first, then open targeted files and line ranges.
+5. Rebuild or run auto-refresh when freshness is stale.
+6. Keep generated artifacts under ignored local folders unless explicitly reviewed for sharing.
+
+## Freshness
+
+- Status: **${fresh.status}**
+- Graph exists: **${fresh.graphExists ? "yes" : "no"}**
+- Tracked files: **${fresh.trackedFiles ?? "unknown"}**
+- Message: ${fresh.message || "No freshness message."}
+
+## Recommended startup commands
+
+\`\`\`powershell
+npm run kg:auto -- --once
+npm run kg:quality
+npm run kg:pack -- --intent=code "<task symbol or feature>"
+\`\`\`
+
+## Agent workflow
+
+1. Run \`npm run kg:pack -- --intent=code "<task>"\` or \`npm run kg:query -- --intent=docs "<topic>"\`.
+2. Read suggested next-read ranges only.
+3. Use \`npm run kg:delta\` after meaningful changes.
+4. Use \`npm run kg:obsidian\` when a richer repo-memory vault is needed.
+5. Before claiming completion, run the repo's real validation plus \`npm run kg:quality\`.
+`;
+}
+function sessionPrompt(args = []) {
+  ensureDir(OUT_DIR);
+  const text = sessionPromptText();
+  fs.writeFileSync(SESSION_PROMPT_MD, text);
+  if (args.includes("--print")) console.log(text);
+  else console.log(`Wrote ${path.relative(ROOT, SESSION_PROMPT_MD)}`);
 }
 function postCommitHookBlock() {
   const start = "# graph-it managed block: start";
@@ -2275,6 +2465,12 @@ function mcpConfigSmokeTest() {
   } catch (err) {
     checks.push({ name: "graph.delta", ok: false, error: err.message });
   }
+  try {
+    const freshnessPayload = callMcpTool("graph.freshness", {});
+    checks.push({ name: "graph.freshness", ok: true, resultBytes: Buffer.byteLength(JSON.stringify(freshnessPayload), "utf8") });
+  } catch (err) {
+    checks.push({ name: "graph.freshness", ok: false, error: err.message });
+  }
   return { ok: checks.every(c => c.ok), checks };
 }
 function mcpConfigResult(args = []) {
@@ -2317,6 +2513,7 @@ function mcpConfigResult(args = []) {
       "Build or refresh the graph with npm run kg:build.",
       "Copy the matching client snippet into your MCP client settings.",
       "Restart the MCP client, then call graph.stats to verify the server.",
+      "Call graph.freshness before broad graph use in long-running local sessions.",
       "Use graph.query before opening raw source files, and graph.delta after rebuilds to see what changed.",
     ],
   };
@@ -2423,6 +2620,11 @@ const MCP_TOOLS = [
     inputSchema: { type: "object", properties: {}, additionalProperties: false },
   },
   {
+    name: "graph.freshness",
+    description: "Return Graph-It freshness status and changed files since the last auto refresh.",
+    inputSchema: { type: "object", properties: {}, additionalProperties: false },
+  },
+  {
     name: "graph.export",
     description: "Write local GraphML, Cypher, and/or SVG graph exports under .semantic-kg/exports.",
     inputSchema: {
@@ -2472,6 +2674,7 @@ function callMcpTool(name, args = {}) {
     return mcpContent({ message: built.output, stats: statsResult() });
   }
   if (name === "graph.delta") return mcpContent(deltaResult());
+  if (name === "graph.freshness") return mcpContent(freshnessResult());
   if (name === "graph.export") {
     const exported = captureConsole(() => exportGraph([args.format || "all"]));
     return mcpContent({ message: exported.output, exportDir: path.relative(ROOT, EXPORT_DIR) });
@@ -2575,6 +2778,9 @@ else if (cmd === "agent-rules") agentRules(args);
 else if (cmd === "obsidian") obsidian();
 else if (cmd === "ingest") ingest(args);
 else if (cmd === "enrich") enrich(args);
+else if (cmd === "auto") auto(args);
+else if (cmd === "freshness") freshness();
+else if (cmd === "session-prompt") sessionPrompt(args);
 else if (cmd === "watch") watch(args);
 else if (cmd === "hook") hook(args);
 else if (cmd === "bootstrap") bootstrap(args);

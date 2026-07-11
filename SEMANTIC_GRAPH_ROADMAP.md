@@ -9,6 +9,7 @@ These additions are prioritized for enterprise AI coding-agent use across MCP-ca
 - Community and god-node report for bridge nodes, surprising links, and stale/orphaned files.
 - Interactive graph viewer for local search, filters, and neighborhood inspection.
 - Watch mode and managed post-commit hook for keeping local artifacts fresh.
+- Auto-refresh mode with freshness tracking and session-start guardrail prompt.
 - MCP server mode for agent access to graph query, path, stats, node, neighborhood, and build tools.
 - Delta reports for changed files, semantic neighborhood movement, new inferred edges, newly isolated nodes, and recommended rereads.
 - MCP Config Helper for copy-ready MCP client configuration and local smoke checks.
@@ -91,6 +92,25 @@ node tools/semantic-kg.mjs hook install
 ```
 
 A fast changed-file pass would keep code/doc graphs fresh during active agent work.
+
+## Shipped: Auto-refresh and session prompt
+
+Graph-It now supports a daemon-lite local updater:
+
+```powershell
+node tools/semantic-kg.mjs auto
+node tools/semantic-kg.mjs auto --once
+```
+
+Auto mode tracks added, changed, removed, and likely renamed files, refreshes graph artifacts after a debounce window, and writes `.semantic-kg/freshness.json`.
+
+Generate a guarded development-session kickoff prompt:
+
+```powershell
+node tools/semantic-kg.mjs session-prompt --print
+```
+
+The prompt tells agents to check freshness, prefer graph context before raw file reads, respect evidence labels, and validate before claiming completion.
 
 ## Shipped: MCP server mode
 

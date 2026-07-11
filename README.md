@@ -71,6 +71,8 @@ ai-memory inject --scope both --project . --query "<new task>" --max-chars 4000
   quality.md                 graph health and repair plan
   delta-report.md            current-vs-previous graph changes
   drift-report.md            docs/narrative drift checks
+  freshness.json             auto-refresh freshness state
+  session-start.md           dev-session kickoff prompt and guardrails
   proof/proof.md             quality + representative query proof pack
   exports/graph.graphml      GraphML export for graph tools
   exports/graph.cypher       Neo4j/Cypher import script
@@ -92,6 +94,9 @@ Run Graph-It in this repo:
 
 ```powershell
 npm run kg:build
+npm run kg:auto -- --once
+npm run kg:freshness
+npm run kg:session-prompt -- --print
 npm run kg:quality
 npm run kg:query -- --intent=code "bootstrap"
 npm run kg:pack -- --intent=code "bootstrap"
@@ -131,6 +136,9 @@ npm run kg:mcp:config -- --smoke-test
 | `drift` | Write docs/narrative drift reports. |
 | `delta` | Compare current and previous graph snapshots. |
 | `quality` | Score graph trust, coverage, noise, and repair actions. |
+| `auto --once` / `auto` | Refresh graph artifacts once or keep them fresh during local development. |
+| `freshness` | Print current graph freshness and changed-file diff. |
+| `session-prompt --print` | Generate a guarded dev-session starter prompt. |
 | `proof "query"` | Write local quality/query proof artifacts. |
 | `export all` | Write GraphML, Cypher, SVG, and manifest. |
 | `wiki` / `obsidian` / `viewer` | Write local navigation surfaces, including an Obsidian vault. |
@@ -174,6 +182,7 @@ Graph-It exposes these local tools over stdio:
 - `graph.neighborhood`
 - `graph.build`
 - `graph.delta`
+- `graph.freshness`
 - `graph.export`
 - `graph.proof`
 - `graph.mcp_config`
@@ -215,6 +224,31 @@ Buckets:
 
 The command writes `.semantic-kg/context-pack.json` with estimated original tokens,
 packed tokens, compression ratio, retained anchors, risk flags, and recommendations.
+
+## Auto-refresh and session start
+
+For active local development, use Graph-It as a live workspace memory layer:
+
+```powershell
+npm run kg:auto
+```
+
+For CI, scripts, or one-time refresh:
+
+```powershell
+npm run kg:auto -- --once
+npm run kg:freshness
+```
+
+Auto mode tracks new, changed, removed, and likely renamed files, then refreshes local graph artifacts and writes `.semantic-kg/freshness.json`.
+
+Generate a session-start prompt for an AI coding agent:
+
+```powershell
+npm run kg:session-prompt -- --print
+```
+
+The prompt includes guardrails for local/confidential work, freshness checks, evidence-label discipline, graph-first navigation, and validation expectations.
 
 ## Trust and privacy
 
@@ -273,6 +307,9 @@ Bootstrap adds these scripts to npm-based target repos when they are missing:
     "kg:obsidian": "node tools/semantic-kg.mjs obsidian",
     "kg:ingest": "node tools/semantic-kg.mjs ingest",
     "kg:enrich": "node tools/semantic-kg.mjs enrich",
+    "kg:auto": "node tools/semantic-kg.mjs auto",
+    "kg:freshness": "node tools/semantic-kg.mjs freshness",
+    "kg:session-prompt": "node tools/semantic-kg.mjs session-prompt",
     "kg:watch": "node tools/semantic-kg.mjs watch",
     "kg:hook:install": "node tools/semantic-kg.mjs hook install",
     "kg:bootstrap": "node tools/semantic-kg.mjs bootstrap",
