@@ -17,7 +17,7 @@ These additions are prioritized for enterprise AI coding-agent use across MCP-ca
 - Enterprise bootstrap command for safe repo-local installation, npm script setup, `.semantic-kg/` ignore rules, optional build, and optional hook install.
 - Enterprise trust docs for architecture, local-first security, artifact boundaries, evidence labels, and enrichment rules.
 - Graph export pack for GraphML, Cypher/Neo4j, and SVG local artifacts.
-- Proof pack for local graph quality, representative queries, and context-reduction proxy evidence.
+- Proof pack for local graph quality, representative queries, and a local context size comparison.
 - Dependency-free smoke test and GitHub Actions CI.
 - Local enrichment sidecars for text-like files and basic embedded PDF text without external calls.
 - Package-friendly `graph-it install` CLI alias and npm package metadata.
@@ -217,7 +217,7 @@ Graph-It now writes `.semantic-kg/proof/proof.json` and `.semantic-kg/proof/proo
 node tools/semantic-kg.mjs proof "architecture" "security privacy" "MCP config"
 ```
 
-The proof pack captures graph health, representative query hits, output size, raw-file size proxy, and reduction ratios.
+The proof pack captures graph health, representative query hits, output size, and a raw-file size comparison.
 
 ## Shipped: Smoke test and CI
 

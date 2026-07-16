@@ -267,6 +267,8 @@ function build() {
   delete g._nodes; delete g._edges;
   g.stats = { nodes: g.nodes.length, edges: g.edges.length, files: g.nodes.filter(n => n.id.startsWith("file:")).length, topics: g.nodes.filter(n => n.kind === "topic").length, symbols: g.nodes.filter(n => n.kind === "symbol").length, components: g.nodes.filter(n => n.kind === "component").length, inferredEdges: g.edges.filter(e => e.evidence === "INFERRED").length };
   if (fs.existsSync(GRAPH_PATH)) fs.copyFileSync(GRAPH_PATH, PREVIOUS_GRAPH_PATH);
+  g._approxTokens = estimateTokens(JSON.stringify(g, null, 2));
+  g._warning = `Do not load this file whole into an LLM (~${g._approxTokens} tokens). Query it via graph.query / graph.pack / graph.node instead.`;
   fs.writeFileSync(GRAPH_PATH, JSON.stringify(g, null, 2));
   console.log(`Built ${path.relative(ROOT, GRAPH_PATH)}: ${g.stats.nodes} nodes, ${g.stats.edges} edges.`);
 }
@@ -385,6 +387,62 @@ function compactNode(n) {
 function compactNeighbor(nb) {
   return { direction: nb.dir, type: nb.type, node: compactNode(nb.node) };
 }
+const CENTRALITY_WEIGHT = 35;
+function pageRank(g, personalization = null, { damping = 0.85, iterations = 40 } = {}) {
+  const ids = g.nodes.map(n => n.id);
+  const N = ids.length;
+  const result = new Map();
+  if (!N) return result;
+  const index = new Map(ids.map((id, i) => [id, i]));
+  const out = new Map();
+  const outDeg = new Array(N).fill(0);
+  for (const e of g.edges) {
+    const f = index.get(e.from), t = index.get(e.to);
+    if (f === undefined || t === undefined) continue;
+    if (!out.has(f)) out.set(f, []);
+    out.get(f).push(t);
+    outDeg[f]++;
+  }
+  let p = new Array(N).fill(1 / N);
+  if (personalization && personalization.size) {
+    let sum = 0; const raw = new Array(N).fill(0);
+    for (const [id, w] of personalization) { const i = index.get(id); if (i !== undefined) { const v = Math.max(0, w); raw[i] += v; sum += v; } }
+    if (sum > 0) p = raw.map(v => v / sum);
+  }
+  let rank = new Array(N).fill(1 / N);
+  for (let it = 0; it < iterations; it++) {
+    const next = new Array(N).fill(0);
+    let dangling = 0;
+    for (let i = 0; i < N; i++) if (outDeg[i] === 0) dangling += rank[i];
+    for (let i = 0; i < N; i++) next[i] = (1 - damping) * p[i] + damping * dangling * p[i];
+    for (let i = 0; i < N; i++) {
+      if (outDeg[i] === 0) continue;
+      const share = damping * rank[i] / outDeg[i];
+      for (const t of out.get(i)) next[t] += share;
+    }
+    rank = next;
+  }
+  let max = 0; for (let i = 0; i < N; i++) if (rank[i] > max) max = rank[i];
+  for (let i = 0; i < N; i++) result.set(ids[i], max > 0 ? rank[i] / max : 0);
+  return result;
+}
+function dedupeNextReads(hits) {
+  const seen = new Map();
+  for (const hit of hits) {
+    if (!hit.nextReads?.length) continue;
+    const kept = [];
+    for (const r of hit.nextReads) {
+      const m = /^(.+?):(\d+)-(\d+)(.*)$/.exec(r);
+      if (!m) { kept.push(r); continue; }
+      const p = m[1], s = Number(m[2]), e = Number(m[3]);
+      const ranges = seen.get(p) || [];
+      if (ranges.some(([S, E]) => s <= E && e >= S)) continue;
+      ranges.push([s, e]); seen.set(p, ranges); kept.push(r);
+    }
+    hit.nextReads = kept;
+  }
+  return hits;
+}
 function queryResult(args) {
   const opts = Array.isArray(args) ? parseQueryArgs(args) : { q: String(args?.q || args?.query || ""), intent: args?.intent || "auto", limit: args?.limit || 12 };
   if (!opts.q) throw new Error("Query is required.");
@@ -392,17 +450,22 @@ function queryResult(args) {
   const a = adj(g);
   const intent = detectIntent(opts.q, opts.intent);
   const info = queryTerms(opts.q);
-  const hits = g.nodes
-    .map(n => ({ n, score: scoreNode(n, info, a, intent) }))
-    .filter(x => x.score > 0)
+  const scored = g.nodes
+    .map(n => ({ n, base: scoreNode(n, info, a, intent) }))
+    .filter(x => x.base > 0);
+  const personalization = new Map(scored.map(x => [x.n.id, x.base]));
+  const pr = pageRank(g, personalization);
+  const hits = scored
+    .map(x => ({ n: x.n, score: x.base + (pr.get(x.n.id) || 0) * CENTRALITY_WEIGHT }))
     .sort((x, y) => y.score - x.score)
     .slice(0, opts.limit)
     .map(({ n, score }) => ({
-      score,
+      score: Math.round(score),
       node: compactNode(n),
       neighbors: (a.get(n.id) || []).slice(0, 8).map(compactNeighbor),
       nextReads: nextReadsFor(n, a),
     }));
+  dedupeNextReads(hits);
   return { query: opts.q, intent, limit: opts.limit, hits };
 }
 function query(args) {
@@ -418,7 +481,22 @@ function query(args) {
     if (hit.nextReads.length) { console.log("  Next reads:"); for (const r of hit.nextReads) console.log(`    - ${r}`); }
   }
 }
-function estimateTokens(text) { return Math.max(1, Math.ceil(Buffer.byteLength(String(text || ""), "utf8") / 4)); }
+function estimateTokens(text) {
+  // Conservative, dependency-free BPE approximation. Plain bytes/4 undercounts code:
+  // identifiers, numbers, and (especially) punctuation tokenize far denser than 4
+  // bytes/token. We weight each class separately and round up so estimates never come
+  // in below reality in the flattering direction. Prefer honesty over a smaller number.
+  const s = String(text || "");
+  if (!s) return 0;
+  const pieces = s.match(/[A-Za-z]+|[0-9]+|\s+|[^A-Za-z0-9\s]/g) || [];
+  let tokens = 0;
+  for (const piece of pieces) {
+    if (/^\s+$/.test(piece)) { tokens += Math.floor(piece.length / 12); continue; } // whitespace rarely its own token
+    if (piece.length === 1 && /[^A-Za-z0-9]/.test(piece)) { tokens += 1; continue; } // punctuation ~1 token each
+    tokens += Math.max(1, Math.ceil(piece.length / 4)); // word/number ~ subword pieces
+  }
+  return Math.max(1, tokens, Math.ceil(s.length / 4));
+}
 function packAnchors(text) {
   const anchors = new Set();
   const source = String(text || "");
@@ -436,22 +514,43 @@ function packRisks(text, kind) {
   if (kind === "code_file" || kind === "symbol" || kind === "component") risks.push("code-context");
   return risks;
 }
-function packHit(hit, index, perItemBudget) {
+function hitRaw(hit) {
   const n = hit.node || {};
-  const raw = [
+  return [
     `${n.kind || "node"}: ${n.label || n.id}`,
     n.path ? `location: ${nodeLocation(n)}` : "",
     n.summary || "",
     hit.nextReads?.length ? `next reads: ${hit.nextReads.join("; ")}` : "",
     hit.neighbors?.length ? `neighbors: ${hit.neighbors.slice(0, 5).map(nb => `${nb.type} ${nb.node?.kind}:${nb.node?.label}`).join("; ")}` : "",
   ].filter(Boolean).join("\n");
-  const bucket = index < 5 ? "graph" : "offloaded";
+}
+function firstSentence(text, max = 140) {
+  const s = String(text || "").replace(/\s+/g, " ").trim();
+  if (!s) return "";
+  const dot = s.indexOf(". ");
+  const cut = dot > 0 ? dot + 1 : s.length;
+  return s.slice(0, Math.min(cut, max)).trim();
+}
+function renderCompressed(hit, anchors) {
+  const n = hit.node || {};
+  return [
+    `${n.kind || "node"}: ${n.label || n.id}${n.path ? ` @ ${nodeLocation(n)}` : ""}`,
+    firstSentence(n.summary),
+    hit.nextReads?.length ? `read: ${hit.nextReads[0]}` : "",
+    anchors.length ? `anchors: ${anchors.slice(0, 4).join(", ")}` : "",
+  ].filter(Boolean).join("\n");
+}
+function packHit(hit, index, bucket) {
+  const n = hit.node || {};
+  const raw = hitRaw(hit);
   const anchors = packAnchors(raw);
-  const packedContent = bucket === "offloaded"
-    ? `Offloaded graph hit: ${n.label || n.id}. Reload if needed.`
-    : [anchors.length ? `Anchors: ${anchors.join(", ")}` : "", raw].filter(Boolean).join("\n").slice(0, perItemBudget * 4);
+  const id = n.id || `hit-${index}`;
+  let packedContent;
+  if (bucket === "offloaded") packedContent = `Offloaded graph hit: ${n.label || n.id}. Reload with graph.node "${id}".`;
+  else if (bucket === "compressed") packedContent = renderCompressed(hit, anchors);
+  else packedContent = [anchors.length ? `Anchors: ${anchors.join(", ")}` : "", raw].filter(Boolean).join("\n");
   return {
-    id: n.id || `hit-${index}`,
+    id,
     title: n.label || n.id || `hit-${index}`,
     bucket,
     kind: n.kind || "graph",
@@ -461,6 +560,7 @@ function packHit(hit, index, perItemBudget) {
     retainedAnchors: anchors,
     riskFlags: packRisks(raw, n.kind),
     nextReads: hit.nextReads || [],
+    reloadWith: id,
   };
 }
 function packResult(args) {
@@ -478,9 +578,50 @@ function packResult(args) {
     retainedAnchors: packAnchors(opts.q),
     riskFlags: [],
     nextReads: [],
+    reloadWith: null,
   };
-  const perItemBudget = Math.max(120, Math.floor(budget / Math.max(1, queryPack.hits.length + 1)));
-  const items = [live, ...queryPack.hits.map((hit, index) => packHit(hit, index, perItemBudget))];
+  // Budget-fit by graceful degradation: keep the highest-ranked hits at full detail
+  // while they fit, drop the next band to extractive "compressed" form, and collapse the
+  // remainder into a single reversible offload pointer. Everything stays reloadable via graph.node.
+  let used = live.packedTokens;
+  const items = [live];
+  const offloaded = [];
+  let stopped = false;
+  for (let i = 0; i < queryPack.hits.length; i++) {
+    const hit = queryPack.hits[i];
+    if (!stopped) {
+      const full = packHit(hit, i, "graph");
+      if (used + full.packedTokens <= budget) { items.push(full); used += full.packedTokens; continue; }
+      const compressed = packHit(hit, i, "compressed");
+      if (used + compressed.packedTokens <= budget) { items.push(compressed); used += compressed.packedTokens; continue; }
+      stopped = true;
+    }
+    offloaded.push({ id: hit.node?.id, label: hit.node?.label, originalTokens: estimateTokens(hitRaw(hit)) });
+  }
+  if (offloaded.length) {
+    const allIds = offloaded.map(o => o.id);
+    const summaryText = (show, hidden) => `Offloaded ${offloaded.length} lower-ranked hit(s) to stay within budget. Reload with graph.node by id: ${show.join(", ")}${hidden ? ` (+${hidden} more)` : ""}.`;
+    const remaining = Math.max(0, budget - used);
+    let show = allIds.slice();
+    let content = summaryText(show, 0);
+    while (show.length && estimateTokens(content) > remaining) {
+      show = show.slice(0, -1);
+      content = show.length ? summaryText(show, allIds.length - show.length) : `Offloaded ${offloaded.length} lower-ranked hit(s); reload with graph.node (ids via graph.query).`;
+    }
+    items.push({
+      id: "offloaded:summary",
+      title: `${offloaded.length} offloaded hits`,
+      bucket: "offloaded",
+      kind: "summary",
+      originalTokens: offloaded.reduce((s, o) => s + o.originalTokens, 0),
+      packedTokens: estimateTokens(content),
+      packedContent: content,
+      retainedAnchors: [],
+      riskFlags: [],
+      nextReads: [],
+      reloadWith: allIds,
+    });
+  }
   const buckets = { live: [], pinned: [], graph: [], compressed: [], offloaded: [] };
   for (const item of items) buckets[item.bucket].push(item);
   const originalTokens = items.reduce((sum, item) => sum + item.originalTokens, 0);
@@ -492,13 +633,15 @@ function packResult(args) {
     budgetTokens: budget,
     originalTokens,
     packedTokens,
+    withinBudget: packedTokens <= budget,
     compressionRatio: originalTokens ? Math.round((packedTokens / originalTokens) * 100) / 100 : 1,
-    estimatedSavings: Math.max(0, originalTokens - packedTokens),
+    tokenDelta: Math.max(0, originalTokens - packedTokens),
     buckets,
     recommendations: [
       "Keep live intent uncompressed.",
       "Use graph bucket hits before opening raw files.",
-      "Offload low-ranked hits until the agent needs them.",
+      "Compressed hits carry signature + first read; reload full detail with graph.node when needed.",
+      "Offloaded hits are reversible pointers — reload with graph.node by id.",
       "Treat risk flags as prompts to inspect raw source before acting.",
     ],
   };
@@ -584,7 +727,7 @@ function pathResult(aName, bName) {
   while (cur) { const p = prev.get(cur); steps.push({ id: cur, via: p?.via }); cur = p?.from; }
   return { found: true, from: compactNode(start), to: compactNode(end), steps: steps.reverse().map(s => ({ via: s.via || null, node: compactNode(nodes.get(s.id)) })) };
 }
-function statsResult() { const g = load(); return { ...g.stats, generatedAt: g.generatedAt, root: g.root, graphPath: path.relative(ROOT, GRAPH_PATH) }; }
+function statsResult() { const g = load(); return { ...g.stats, generatedAt: g.generatedAt, root: g.root, graphPath: path.relative(ROOT, GRAPH_PATH), graphApproxTokens: g._approxTokens ?? estimateTokens(JSON.stringify(g)), graphReadHint: "Do not read graph.json raw. Use graph.query / graph.pack / graph.node." }; }
 function stats() { console.log(JSON.stringify(statsResult(), null, 2)); }
 function nodeResult(needle) {
   const g = load();
@@ -886,13 +1029,13 @@ function proof(args = []) {
       hits: result.hits.length,
       resultKB,
       rawKB,
-      reduction: rawKB > 0 ? Number((rawKB / Math.max(0.1, resultKB)).toFixed(1)) : null,
+      sizeRatio: rawKB > 0 ? Number((rawKB / Math.max(0.1, resultKB)).toFixed(1)) : null,
       topHits: result.hits.slice(0, 5).map(h => ({ score: h.score, node: h.node, nextReads: h.nextReads })),
     };
   });
   const proofPack = {
     generatedAt: new Date().toISOString(),
-    privacy: "Local proof artifact only. It summarizes graph quality and query compression without calling external services.",
+    privacy: "Local proof artifact only. It summarizes graph quality and a local query context-size comparison without calling external services.",
     stats: g.stats,
     quality: { score: q.score, grade: q.grade, metrics: q.metrics, recommendations: q.recommendations },
     queries: queryProof,
@@ -950,7 +1093,7 @@ function examples(args = []) {
   console.log(`Wrote worked example to ${path.relative(ROOT, outDir)}`);
 }
 function agentRuleText(platform) {
-  const base = `# Graph-It Agent Rules\n\nUse Graph-It before broad raw-file reads. Prefer scoped graph queries for architecture, ownership, impact, and code-navigation questions.\n\nCommands:\n- Build: \`node tools/semantic-kg.mjs build\`\n- Query: \`node tools/semantic-kg.mjs query --intent=code \"SymbolName\"\`\n- Docs query: \`node tools/semantic-kg.mjs query --intent=docs \"release architecture\"\`\n- Delta: \`node tools/semantic-kg.mjs delta\`\n- Quality: \`node tools/semantic-kg.mjs quality\`\n- Proof: \`node tools/semantic-kg.mjs proof \"architecture\" \"security privacy\"\`\n\nPrivacy:\n- Treat \`.semantic-kg/\` as local operational data.\n- Do not share graph artifacts externally without review.\n- Prefer EXTRACTED edges; treat INFERRED and AMBIGUOUS edges as guidance.\n`;
+  const base = `# Graph-It Agent Rules\n\nUse Graph-It before broad raw-file reads. Prefer scoped graph queries for architecture, ownership, impact, and code-navigation questions.\n\nCommands:\n- Build: \`node tools/semantic-kg.mjs build\`\n- Query: \`node tools/semantic-kg.mjs query --intent=code \"SymbolName\"\`\n- Docs query: \`node tools/semantic-kg.mjs query --intent=docs \"release architecture\"\`\n- Delta: \`node tools/semantic-kg.mjs delta\`\n- Quality: \`node tools/semantic-kg.mjs quality\`\n- Proof: \`node tools/semantic-kg.mjs proof \"architecture\" \"security privacy\"\`\n\nToken discipline:\n- Never read \`.semantic-kg/graph.json\` whole. It is large (see its \`_approxTokens\` field / \`graph.stats.graphApproxTokens\`) and reading it raw amplifies token cost.\n- Reach the graph only through \`query\`, \`pack\`, \`node\`, \`neighborhood\`, or \`path\`, then open just the suggested next-read line ranges.\n\nOutput discipline:\n- Do not restate unchanged code or file contents back to the user; reference path and line range instead.\n- Skip filler and preamble; reserve extended reasoning for genuinely hard steps. Output tokens are the more expensive side of most model bills.\n\nPrivacy:\n- Treat \`.semantic-kg/\` as local operational data.\n- Do not share graph artifacts externally without review.\n- Prefer EXTRACTED edges; treat INFERRED and AMBIGUOUS edges as guidance.\n`;
   if (platform === "cursor") return `---\nalwaysApply: true\n---\n\n${base}`;
   if (platform === "claude") return `${base}\nWhen the user asks about this repo, query Graph-It first unless the graph is missing or stale.\n`;
   if (platform === "codex") return `${base}\nFor coding tasks, start with Graph-It query/quality/delta before large recursive searches.\n`;
@@ -975,7 +1118,7 @@ function agentRules(args = []) {
   console.log(`Wrote agent rule pack: ${files.join(", ")}`);
 }
 function renderProofMarkdown(p) {
-  return `# Graph-It Proof Pack\n\nGenerated: ${p.generatedAt}\n\nPrivacy: ${p.privacy}\n\n## Graph Health\n\n| Metric | Value |\n|---|---:|\n| Nodes | ${p.stats.nodes} |\n| Edges | ${p.stats.edges} |\n| Files | ${p.stats.files} |\n| Inferred edges | ${p.stats.inferredEdges} |\n| Quality score | ${p.quality.score}/100 (${p.quality.grade}) |\n\n## Query Compression\n\n| Query | Intent | Hits | Result KB | Raw KB | Reduction |\n|---|---|---:|---:|---:|---:|\n${p.queries.map(q => `| ${md(q.query)} | ${q.intent} | ${q.hits} | ${q.resultKB} | ${q.rawKB} | ${q.reduction ?? "n/a"} |`).join("\n")}\n\n## Top Hits\n\n${p.queries.map(q => `### ${md(q.query)}\n\n${q.topHits.length ? q.topHits.map(h => `- **${md(h.node.label || h.node.id)}** (${h.node.kind}${h.node.path ? `, \`${h.node.path}\`` : ""}) score ${h.score}`).join("\n") : "- No hits"}`).join("\n\n")}\n\n## Recommendations\n\n${p.quality.recommendations.map(r => `- ${md(r)}`).join("\n")}\n`;
+  return `# Graph-It Proof Pack\n\nGenerated: ${p.generatedAt}\n\nPrivacy: ${p.privacy}\n\n## Graph Health\n\n| Metric | Value |\n|---|---:|\n| Nodes | ${p.stats.nodes} |\n| Edges | ${p.stats.edges} |\n| Files | ${p.stats.files} |\n| Inferred edges | ${p.stats.inferredEdges} |\n| Quality score | ${p.quality.score}/100 (${p.quality.grade}) |\n\n## Query context size\n\n| Query | Intent | Hits | Graph KB | Raw KB | Raw/Graph |\n|---|---|---:|---:|---:|---:|\n${p.queries.map(q => `| ${md(q.query)} | ${q.intent} | ${q.hits} | ${q.resultKB} | ${q.rawKB} | ${q.sizeRatio ?? "n/a"} |`).join("\n")}\n\n## Top Hits\n\n${p.queries.map(q => `### ${md(q.query)}\n\n${q.topHits.length ? q.topHits.map(h => `- **${md(h.node.label || h.node.id)}** (${h.node.kind}${h.node.path ? `, \`${h.node.path}\`` : ""}) score ${h.score}`).join("\n") : "- No hits"}`).join("\n\n")}\n\n## Recommendations\n\n${p.quality.recommendations.map(r => `- ${md(r)}`).join("\n")}\n`;
 }
 
 function yamlValue(v) { return String(v ?? "").replace(/"/g, '\\"'); }
@@ -2220,6 +2363,8 @@ Use this prompt at the start of an AI coding-agent session in this repo.
 4. Use compact graph context first, then open targeted files and line ranges.
 5. Rebuild or run auto-refresh when freshness is stale.
 6. Keep generated artifacts under ignored local folders unless explicitly reviewed for sharing.
+7. Never read \`.semantic-kg/graph.json\` whole — it is large (see \`_approxTokens\`) and will amplify token cost. Query it via \`graph.query\` / \`graph.pack\` / \`graph.node\` (or the \`kg:query\` / \`kg:pack\` scripts) instead.
+8. Keep your own responses terse: do not restate unchanged code or file contents back to the user, skip ceremony, and reserve extended reasoning for genuinely hard steps (routine file reads and passing tests do not need a narrated recap). Output tokens cost more than input on most models.
 
 ## Freshness
 
@@ -2637,7 +2782,7 @@ const MCP_TOOLS = [
   },
   {
     name: "graph.proof",
-    description: "Write a local proof pack with quality score, representative queries, and token/context reduction proxy.",
+    description: "Write a local proof pack with quality score, representative queries, and a local context size comparison.",
     inputSchema: {
       type: "object",
       properties: {
@@ -2662,10 +2807,35 @@ const MCP_TOOLS = [
 function mcpContent(value) {
   return { content: [{ type: "text", text: typeof value === "string" ? value : JSON.stringify(value, null, 2) }] };
 }
+const MCP_SENT_LEDGER = new Set();
+function applySentLedger(result) {
+  // MCP sessions are one process per client, so this in-memory ledger is session-scoped.
+  // Content already delivered this session is collapsed to a reversible pointer so repeated
+  // packs of overlapping hits do not re-spend tokens on the same material.
+  if (!result?.buckets) return result;
+  for (const bucket of Object.keys(result.buckets)) {
+    if (bucket === "live") continue;
+    for (const item of result.buckets[bucket]) {
+      if (!item?.id) continue;
+      if (MCP_SENT_LEDGER.has(item.id)) {
+        item.skipped = true;
+        item.packedContent = `Already sent this session. Reload with graph.node "${item.id}".`;
+        item.packedTokens = estimateTokens(item.packedContent);
+      } else {
+        MCP_SENT_LEDGER.add(item.id);
+      }
+    }
+  }
+  result.packedTokens = Object.values(result.buckets).flat().reduce((sum, item) => sum + (item.packedTokens || 0), 0);
+  result.tokenDelta = Math.max(0, result.originalTokens - result.packedTokens);
+  result.compressionRatio = result.originalTokens ? Math.round((result.packedTokens / result.originalTokens) * 100) / 100 : 1;
+  result.withinBudget = result.packedTokens <= result.budgetTokens;
+  return result;
+}
 function callMcpTool(name, args = {}) {
   if (name === "graph.stats") return mcpContent(statsResult());
   if (name === "graph.query") return mcpContent(queryResult({ query: args.query, intent: args.intent || "auto", limit: args.limit || 12 }));
-  if (name === "graph.pack") return mcpContent(packResult({ query: args.query, intent: args.intent || "auto", limit: args.limit || 12, budget: args.budget || 1600 }));
+  if (name === "graph.pack") return mcpContent(applySentLedger(packResult({ query: args.query, intent: args.intent || "auto", limit: args.limit || 12, budget: args.budget || 1600 })));
   if (name === "graph.path") return mcpContent(pathResult(args.from, args.to));
   if (name === "graph.node") return mcpContent(nodeResult(args.query));
   if (name === "graph.neighborhood") return mcpContent(neighborhoodResult(args.query, args.depth || 1, args.limit || 40));

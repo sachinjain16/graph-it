@@ -27,7 +27,7 @@ The core idea is simple: **query the graph first, then read only the files and l
 - **Evidence-labeled graph**: every edge is marked `EXTRACTED`, `INFERRED`, or `AMBIGUOUS`.
 - **Repo-local install**: bootstrap any repo with safe defaults, npm scripts, `.semantic-kg/` ignore rules, optional build, and optional git hook.
 - **Useful beyond one assistant**: generate instruction packs for generic agents, Copilot CLI, Claude Code, Cursor, and Codex.
-- **Proof before adoption**: write local proof packs showing graph quality, query hits, and context-reduction proxies.
+- **Proof before adoption**: write local proof packs showing graph quality, representative query hits, and a local context-size comparison.
 
 ## At a glance
 
@@ -39,28 +39,15 @@ The core idea is simple: **query the graph first, then read only the files and l
 | Trust but verify graph output | Evidence labels, quality score, proof packs, delta reports, and drift reports. |
 | Bring it to another repo fast | `graph-it install --project ..\target-repo --build` or repo-local bootstrap. |
 
-## Optional companion: Memorize-It
+## Default agent rhythm
 
-Memorize-It is a separate optional tool and repo; it is not required by Graph-It and is not bundled with it. The recommended best-practice pairing is:
-
-| Tool | Owns | Use it for |
-|---|---|---|
-| **Graph-It** | Repo map, semantic graph, code/docs navigation | "Where is this thing? What files matter?" |
-| **Memorize-It** | Session memory, learnings, prior-work context | "What did we learn last time? What should the agent remember?" |
-
-Use both when you want an agent-ready repo:
+The intended loop is: refresh the graph, ask it where to look, then open only the
+returned files and line ranges.
 
 ```powershell
 graph-it install --project . --build
-ai-memory install-hooks --project .
-ai-memory learn --scope local --project . --category convention --text "<first repo convention>"
-```
-
-Default agent rhythm:
-
-```powershell
 graph-it query --intent=code "<symbol or feature>"
-ai-memory inject --scope both --project . --query "<new task>" --max-chars 4000
+graph-it pack --intent=code --budget=1600 "<task>"
 ```
 
 ## What it builds
@@ -205,9 +192,9 @@ This is intentionally not a cloud RAG pipeline. Optional richer OCR, PDF, Office
 
 ## Context Pack
 
-Graph-It includes a lightweight Headroom-inspired context packer. It does not proxy
-model traffic or call external services. It takes ranked graph hits and returns a
-small agent-ready context pack:
+Graph-It includes a lightweight, token-aware context packer. It does not proxy model
+traffic or call external services. It takes ranked graph hits and returns a small
+agent-ready context pack that fits a token budget:
 
 ```powershell
 npm run kg:pack -- --intent=docs --budget=1600 "architecture skills memory"
@@ -218,12 +205,30 @@ Buckets:
 | Bucket | Purpose |
 |---|---|
 | `live` | Current query/intent, kept uncompressed |
-| `graph` | Top ranked graph hits with anchors and next-read ranges |
-| `compressed` | Reserved for noisy artifacts in downstream integrations |
-| `offloaded` | Lower-ranked hits to reload only if needed |
+| `graph` | Top-ranked hits at full detail: anchors, summary, neighbors, next-read ranges |
+| `compressed` | Mid-ranked hits reduced to an extractive form: signature, first summary line, first next-read, anchors |
+| `offloaded` | Lower-ranked hits collapsed into a single reversible pointer; reload any of them by id with `graph.node` |
 
-The command writes `.semantic-kg/context-pack.json` with estimated original tokens,
-packed tokens, compression ratio, retained anchors, risk flags, and recommendations.
+The packer fills buckets by graceful degradation so the total stays within the token
+budget: it keeps the highest-ranked hits at full detail while they fit, drops the next
+band to compressed form, and turns the remainder into one reversible offload pointer.
+Nothing is lost — every packed item carries a `reloadWith` id.
+
+It writes `.semantic-kg/context-pack.json` with estimated original tokens, packed
+tokens, retained anchors, risk flags, and recommendations.
+
+Token estimates come from a dependency-free approximation that is intentionally
+conservative for code (identifiers and punctuation tokenize densely). They are a local
+planning aid, not an exact tokenizer count.
+
+## Token discipline
+
+`.semantic-kg/graph.json` is the full graph and can be large. Each build stamps it with
+`_approxTokens` and a `_warning`, and `graph.stats` reports `graphApproxTokens`. Agents
+should never read `graph.json` whole — query it through `graph.query`, `graph.pack`,
+`graph.node`, `graph.neighborhood`, or `graph.path`, then open only the suggested
+next-read line ranges. Generated agent rules and the session-start prompt include this
+rule.
 
 ## Auto-refresh and session start
 

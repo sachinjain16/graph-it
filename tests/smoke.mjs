@@ -32,7 +32,27 @@ try {
   assertFile(".semantic-kg/graph.json");
 
   run("node", ["tools/semantic-kg.mjs", "query", "--intent=code", "bootstrapGraphIt"]);
-  run("node", ["tools/semantic-kg.mjs", "pack", "--intent=code", "--budget=800", "bootstrapGraphIt"]);
+  const packOut = run("node", ["tools/semantic-kg.mjs", "pack", "--intent=code", "--budget=800", "bootstrapGraphIt"]);
+  const packJson = JSON.parse(fs.readFileSync(path.join(tmp, ".semantic-kg/context-pack.json"), "utf8"));
+  if (!(packJson.originalTokens > 0) || !(packJson.packedTokens > 0)) throw new Error("Pack token estimates should be positive");
+  // Budget fit: packed tokens stay within budget plus at most one small degradation item.
+  if (packJson.packedTokens > packJson.budgetTokens + 60) throw new Error(`Pack exceeded budget by more than one item: ${packJson.packedTokens} > ${packJson.budgetTokens}`);
+  // Reversibility: every non-live packed item must carry a reload pointer.
+  for (const bucket of ["graph", "compressed", "offloaded"]) {
+    for (const item of packJson.buckets[bucket] || []) {
+      if (item.reloadWith === undefined || item.reloadWith === null) throw new Error(`Packed ${bucket} item ${item.id} missing reloadWith`);
+    }
+  }
+
+  // Token estimator must not undercount punctuation-dense code the way bytes/4 did.
+  const graph = JSON.parse(fs.readFileSync(path.join(tmp, ".semantic-kg/graph.json"), "utf8"));
+  if (!(graph._approxTokens > 0)) throw new Error("graph.json missing positive _approxTokens header");
+  if (!/Do not load this file whole/.test(graph._warning || "")) throw new Error("graph.json missing raw-read warning header");
+  const bytesOver4 = Math.ceil(Buffer.byteLength(JSON.stringify(graph, null, 2), "utf8") / 4);
+  if (!(graph._approxTokens >= bytesOver4)) throw new Error("Estimator regressed below bytes/4 (should be conservative for code)");
+  const statsOut = JSON.parse(run("node", ["tools/semantic-kg.mjs", "stats"]));
+  if (!(statsOut.graphApproxTokens > 0)) throw new Error("stats missing graphApproxTokens");
+
   run("node", ["tools/semantic-kg.mjs", "quality"]);
   run("node", ["tools/semantic-kg.mjs", "export", "all"]);
   run("node", ["tools/semantic-kg.mjs", "proof", "architecture", "bootstrapGraphIt"]);
