@@ -96,6 +96,9 @@ All of the following are implemented and covered by `tests/smoke.mjs`:
 - Extractive `compressed` bucket and `reloadWith` reversibility on every packed item.
 - Optional AST call/reference edges for JS/TS (`--ast` / `GRAPHIT_AST=1`) via a locally
   installed parser, with graceful fallback to deterministic extraction.
+- Incremental changed-file graph updates (`build --incremental`, used by auto/watch) that
+  re-extract only changed and removed files and produce output identical to a full rebuild
+  (verified in the smoke test); falls back to a full build for AST graphs.
 - Next-read range de-duplication.
 - MCP session ledger that collapses repeated packs to reversible pointers.
 - Output-discipline guidance in the session prompt and agent rules.

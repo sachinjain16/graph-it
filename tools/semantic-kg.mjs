@@ -178,6 +178,7 @@ Usage:
   node tools/semantic-kg.mjs eval [--k=5] [--limit=20] [--auto=30] [--cases=path] [--min-hit-rate=0.8] [--strict]
 
 Global flags:
+  --incremental       (build only) Update only changed/removed files against the existing graph instead of a full rebuild. Falls back to a full build for AST graphs. Output matches a full build.
   --tokenizer=exact   Use an installed local BPE tokenizer (gpt-tokenizer or js-tiktoken) for exact token counts; falls back to the conservative heuristic if none is installed.
   --ast               Use an installed local parser (@babel/parser or acorn) to add AST-accurate call/reference edges for JS/TS; falls back to regex extraction if none is installed.`);
 }
@@ -310,51 +311,93 @@ function indexText(g, p, text) {
   }
 }
 
-function build() {
-  ensureDir(OUT_DIR); ensureDir(CACHE_DIR);
-  const g = { schemaVersion: 1, generatedAt: new Date().toISOString(), root: ROOT, includeGenerated: INCLUDE_GENERATED, nodes: [], edges: [], stats: {}, _nodes: new Set(), _edges: new Set() };
-  for (const t of SEMANTIC_TOPICS) addNode(g, { id: t.id, kind: "topic", label: t.label, aliases: t.aliases, summary: `Semantic topic for ${t.label}.`, tokens: tokenize(`${t.label} ${t.aliases.join(" ")}`) });
-  const astCalls = [];
-  for (const abs of walk(ROOT)) {
-    const p = rel(abs); const ext = path.extname(abs).toLowerCase(); const bytes = fs.readFileSync(abs); const hash = sha(bytes); const kind = kindFor(ext);
-    const text = TEXT_EXTS.has(ext) ? fs.readFileSync(abs, "utf8") : "";
-    const summary = summarizeFile(p, kind, ext);
-    const node = { id: fileId(p), kind, label: path.basename(p), path: p, ext: ext || "none", bytes: bytes.length, sha256: hash, summary, semanticTags: matchedTopics(`${p} ${summary} ${text.slice(0, 8000)}`).map(t => t.label), tokens: tokenize(`${p} ${summary} ${text.slice(0, 4000)}`) };
-    if ([...IMAGE_EXTS, ...PDF_EXTS, ...VIDEO_EXTS].includes(ext)) node.caption = summary;
-    addNode(g, node);
-    fs.writeFileSync(path.join(CACHE_DIR, `${hash}.json`), JSON.stringify({ path: p, sha256: hash, bytes: bytes.length, tokens: node.tokens.slice(0, 40) }, null, 2));
-    if (text) indexText(g, p, text);
-    if (astParse && text && CODE_EXTS.has(ext)) astPass(p, text, astCalls);
-    for (const topic of matchedTopics(`${p} ${summary} ${text.slice(0, 10000)}`)) addEdge(g, fileId(p), topic.id, "SEMANTICALLY_RELATED", { evidence: "INFERRED", confidence: 0.65, why: `Matched aliases for ${topic.label}.` });
-    if (ARCHIVE_EXTS.has(ext)) for (const tag of path.basename(p, ext).split(/[-_\s]+/).filter(x => x.length > 2)) {
-      const id = `concept:${tag.toLowerCase()}`; addNode(g, { id, kind: "concept", label: tag, tokens: tokenize(tag) }); addEdge(g, fileId(p), id, "TAGGED", { evidence: "EXTRACTED" });
-    }
+function indexFile(g, abs, astCalls) {
+  const p = rel(abs); const ext = path.extname(abs).toLowerCase(); const bytes = fs.readFileSync(abs); const hash = sha(bytes); const kind = kindFor(ext);
+  const text = TEXT_EXTS.has(ext) ? fs.readFileSync(abs, "utf8") : "";
+  const summary = summarizeFile(p, kind, ext);
+  const node = { id: fileId(p), kind, label: path.basename(p), path: p, ext: ext || "none", bytes: bytes.length, sha256: hash, summary, semanticTags: matchedTopics(`${p} ${summary} ${text.slice(0, 8000)}`).map(t => t.label), tokens: tokenize(`${p} ${summary} ${text.slice(0, 4000)}`) };
+  if ([...IMAGE_EXTS, ...PDF_EXTS, ...VIDEO_EXTS].includes(ext)) node.caption = summary;
+  addNode(g, node);
+  fs.writeFileSync(path.join(CACHE_DIR, `${hash}.json`), JSON.stringify({ path: p, sha256: hash, bytes: bytes.length, tokens: node.tokens.slice(0, 40) }, null, 2));
+  if (text) indexText(g, p, text);
+  if (astParse && text && CODE_EXTS.has(ext)) astPass(p, text, astCalls);
+  for (const topic of matchedTopics(`${p} ${summary} ${text.slice(0, 10000)}`)) addEdge(g, fileId(p), topic.id, "SEMANTICALLY_RELATED", { evidence: "INFERRED", confidence: 0.65, why: `Matched aliases for ${topic.label}.` });
+  if (ARCHIVE_EXTS.has(ext)) for (const tag of path.basename(p, ext).split(/[-_\s]+/).filter(x => x.length > 2)) {
+    const id = `concept:${tag.toLowerCase()}`; addNode(g, { id, kind: "concept", label: tag, tokens: tokenize(tag) }); addEdge(g, fileId(p), id, "TAGGED", { evidence: "EXTRACTED" });
   }
+}
+function resolveAstCalls(g, astCalls) {
   let astCallEdges = 0;
-  if (astParse && astCalls.length) {
-    const labelToIds = new Map();
-    for (const n of g.nodes) if (n.kind === "symbol" || n.kind === "component") { if (!labelToIds.has(n.label)) labelToIds.set(n.label, []); labelToIds.get(n.label).push(n.id); }
-    for (const c of astCalls) {
-      const callerId = symbolId(c.p, c.caller);
-      if (!g._nodes.has(callerId)) continue;
-      let calleeId = null;
-      const sameFile = symbolId(c.p, c.callee);
-      if (g._nodes.has(sameFile)) calleeId = sameFile;
-      else { const ids = labelToIds.get(c.callee); if (ids && ids.length === 1) calleeId = ids[0]; }
-      if (!calleeId || calleeId === callerId) continue;
-      const before = g.edges.length;
-      addEdge(g, callerId, calleeId, "REFERENCES", { evidence: "EXTRACTED", why: "AST call reference" });
-      if (g.edges.length > before) astCallEdges++;
-    }
+  if (!astParse || !astCalls.length) return astCallEdges;
+  const labelToIds = new Map();
+  for (const n of g.nodes) if (n.kind === "symbol" || n.kind === "component") { if (!labelToIds.has(n.label)) labelToIds.set(n.label, []); labelToIds.get(n.label).push(n.id); }
+  for (const c of astCalls) {
+    const callerId = symbolId(c.p, c.caller);
+    if (!g._nodes.has(callerId)) continue;
+    let calleeId = null;
+    const sameFile = symbolId(c.p, c.callee);
+    if (g._nodes.has(sameFile)) calleeId = sameFile;
+    else { const ids = labelToIds.get(c.callee); if (ids && ids.length === 1) calleeId = ids[0]; }
+    if (!calleeId || calleeId === callerId) continue;
+    const before = g.edges.length;
+    addEdge(g, callerId, calleeId, "REFERENCES", { evidence: "EXTRACTED", why: "AST call reference" });
+    if (g.edges.length > before) astCallEdges++;
   }
-  delete g._nodes; delete g._edges;
-  g.stats = { nodes: g.nodes.length, edges: g.edges.length, files: g.nodes.filter(n => n.id.startsWith("file:")).length, topics: g.nodes.filter(n => n.kind === "topic").length, symbols: g.nodes.filter(n => n.kind === "symbol").length, components: g.nodes.filter(n => n.kind === "component").length, inferredEdges: g.edges.filter(e => e.evidence === "INFERRED").length, astCallEdges };
+  return astCallEdges;
+}
+function computeStats(g, astCallEdges) {
+  g.stats = { nodes: g.nodes.length, edges: g.edges.length, files: g.nodes.filter(n => n.sha256 && n.id.startsWith("file:")).length, topics: g.nodes.filter(n => n.kind === "topic").length, symbols: g.nodes.filter(n => n.kind === "symbol").length, components: g.nodes.filter(n => n.kind === "component").length, inferredEdges: g.edges.filter(e => e.evidence === "INFERRED").length, astCallEdges };
+}
+function writeGraph(g) {
   if (fs.existsSync(GRAPH_PATH)) fs.copyFileSync(GRAPH_PATH, PREVIOUS_GRAPH_PATH);
   g._approxTokens = estimateTokens(JSON.stringify(g, null, 2));
   g._tokenizer = tokenizerName();
   g._warning = `Do not load this file whole into an LLM (~${g._approxTokens} tokens). Query it via graph.query / graph.pack / graph.node instead.`;
   fs.writeFileSync(GRAPH_PATH, JSON.stringify(g, null, 2));
+}
+function build() {
+  ensureDir(OUT_DIR); ensureDir(CACHE_DIR);
+  const g = { schemaVersion: 1, generatedAt: new Date().toISOString(), root: ROOT, includeGenerated: INCLUDE_GENERATED, nodes: [], edges: [], stats: {}, _nodes: new Set(), _edges: new Set() };
+  for (const t of SEMANTIC_TOPICS) addNode(g, { id: t.id, kind: "topic", label: t.label, aliases: t.aliases, summary: `Semantic topic for ${t.label}.`, tokens: tokenize(`${t.label} ${t.aliases.join(" ")}`) });
+  const astCalls = [];
+  for (const abs of walk(ROOT)) indexFile(g, abs, astCalls);
+  const astCallEdges = resolveAstCalls(g, astCalls);
+  delete g._nodes; delete g._edges;
+  computeStats(g, astCallEdges);
+  writeGraph(g);
   console.log(`Built ${path.relative(ROOT, GRAPH_PATH)}: ${g.stats.nodes} nodes, ${g.stats.edges} edges${astParse ? `, ${g.stats.astCallEdges} AST call edges` : ""}.`);
+}
+function buildIncremental() {
+  // Changed-file-only merge. Cross-file resolution (AST call edges) is global, so any
+  // AST-built graph or --ast run falls back to a full rebuild to guarantee correctness.
+  if (!fs.existsSync(GRAPH_PATH) || AST_MODE) { build(); return; }
+  const g = JSON.parse(fs.readFileSync(GRAPH_PATH, "utf8"));
+  if (g.stats && g.stats.astCallEdges > 0) { build(); return; }
+  ensureDir(OUT_DIR); ensureDir(CACHE_DIR);
+  delete g._approxTokens; delete g._tokenizer; delete g._warning;
+  const prevSha = new Map(g.nodes.filter(n => n.sha256 && n.id.startsWith("file:")).map(n => [n.path, n.sha256]));
+  const current = new Map();
+  for (const abs of walk(ROOT)) current.set(rel(abs), abs);
+  const changed = []; const removed = [];
+  for (const [p, abs] of current) { const h = sha(fs.readFileSync(abs)); if (prevSha.get(p) !== h) changed.push(abs); }
+  for (const p of prevSha.keys()) if (!current.has(p)) removed.push(p);
+  if (!changed.length && !removed.length) { g.generatedAt = new Date().toISOString(); computeStats(g, 0); writeGraph(g); console.log("Incremental update: no changes."); return; }
+  const affected = new Set([...changed.map(a => rel(a)), ...removed]);
+  const deletedIds = new Set(g.nodes.filter(n => n.path && affected.has(n.path)).map(n => n.id));
+  g.nodes = g.nodes.filter(n => !deletedIds.has(n.id));
+  g.edges = g.edges.filter(e => !deletedIds.has(e.from) && !deletedIds.has(e.to));
+  g._nodes = new Set(g.nodes.map(n => n.id));
+  g._edges = new Set(g.edges.map(e => `${e.from}\0${e.type}\0${e.to}`));
+  const astCalls = [];
+  for (const abs of changed) indexFile(g, abs, astCalls);
+  const referenced = new Set();
+  for (const e of g.edges) { referenced.add(e.from); referenced.add(e.to); }
+  g.nodes = g.nodes.filter(n => n.kind !== "concept" || referenced.has(n.id));
+  g.generatedAt = new Date().toISOString();
+  delete g._nodes; delete g._edges;
+  computeStats(g, 0);
+  writeGraph(g);
+  console.log(`Incremental update: ${changed.length} changed, ${removed.length} removed -> ${g.stats.nodes} nodes, ${g.stats.edges} edges.`);
 }
 function refreshGeneratedArtifacts({ wikiOutput = true, viewerOutput = true } = {}) {
   build();
@@ -2502,7 +2545,7 @@ function parseAutoArgs(args) {
 function autoRefresh(opts, diff, records) {
   const startedAt = new Date().toISOString();
   const outputs = [];
-  build(); outputs.push(path.relative(ROOT, GRAPH_PATH));
+  buildIncremental(); outputs.push(path.relative(ROOT, GRAPH_PATH));
   delta(); outputs.push(path.relative(ROOT, DELTA_REPORT_MD));
   if (opts.quality) { quality(); outputs.push(path.relative(ROOT, QUALITY_MD)); }
   if (opts.wiki) { wiki(); outputs.push(path.relative(ROOT, WIKI_DIR)); }
@@ -3157,7 +3200,7 @@ if (AST_MODE) {
 }
 const [cmd, ...args] = process.argv.slice(2).filter(a => !a.startsWith("--tokenizer=") && a !== "--ast");
 if (!cmd || cmd === "help" || cmd === "--help") usage();
-else if (cmd === "build") build();
+else if (cmd === "build") { if (args.includes("--incremental")) buildIncremental(); else build(); }
 else if (cmd === "stats") stats();
 else if (cmd === "query") query(args);
 else if (cmd === "pack") pack(args);

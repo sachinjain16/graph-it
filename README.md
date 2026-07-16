@@ -287,6 +287,17 @@ npm run kg:freshness
 
 Auto mode tracks new, changed, removed, and likely renamed files, then refreshes local graph artifacts and writes `.semantic-kg/freshness.json`.
 
+Auto and watch refresh the graph **incrementally** — only changed and removed files are
+re-extracted and merged into the existing graph, which is much faster on large repos. The
+result matches a full rebuild. You can also run an incremental build directly:
+
+```powershell
+npm run kg:build -- --incremental
+```
+
+Incremental mode falls back to a full rebuild when there is no existing graph or when the
+graph uses AST call edges (whose cross-file resolution is global).
+
 Generate a session-start prompt for an AI coding agent:
 
 ```powershell

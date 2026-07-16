@@ -59,6 +59,15 @@ try {
   run("node", ["tools/semantic-kg.mjs", "build", "--ast"]);
   const statsAst = JSON.parse(run("node", ["tools/semantic-kg.mjs", "stats"]));
   if (statsAst.astCallEdges !== 0) throw new Error("AST request without a parser should yield 0 AST edges, not crash");
+  // Incremental parity: a changed-file incremental build must equal a full rebuild.
+  const graphFile = path.join(tmp, ".semantic-kg/graph.json");
+  fs.writeFileSync(path.join(tmp, "src", "app.js"), "export function bootstrapGraphIt(){ return helperTwo(); }\nexport function helperTwo(){ return 'enterprise local graph v2'; }\n");
+  run("node", ["tools/semantic-kg.mjs", "build", "--incremental"]);
+  const incG = JSON.parse(fs.readFileSync(graphFile, "utf8"));
+  run("node", ["tools/semantic-kg.mjs", "build"]);
+  const fullG = JSON.parse(fs.readFileSync(graphFile, "utf8"));
+  const normGraph = g => JSON.stringify({ n: g.nodes.map(x => x.id).sort(), e: g.edges.map(x => `${x.from}|${x.type}|${x.to}`).sort(), s: g.stats });
+  if (normGraph(incG) !== normGraph(fullG)) throw new Error("Incremental build does not match full build");
 
   run("node", ["tools/semantic-kg.mjs", "quality"]);
   const evalOut = run("node", ["tools/semantic-kg.mjs", "eval", "--k=5", "--auto=15"]);
