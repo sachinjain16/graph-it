@@ -15,6 +15,8 @@ const DELTA_REPORT_JSON = path.join(OUT_DIR, "delta-report.json");
 const DELTA_REPORT_MD = path.join(OUT_DIR, "delta-report.md");
 const QUALITY_JSON = path.join(OUT_DIR, "quality.json");
 const QUALITY_MD = path.join(OUT_DIR, "quality.md");
+const EVAL_REPORT_JSON = path.join(OUT_DIR, "eval-report.json");
+const EVAL_REPORT_MD = path.join(OUT_DIR, "eval-report.md");
 const FRESHNESS_JSON = path.join(OUT_DIR, "freshness.json");
 const SESSION_PROMPT_MD = path.join(OUT_DIR, "session-start.md");
 const CACHE_DIR = path.join(OUT_DIR, "cache");
@@ -82,6 +84,7 @@ const PACKAGE_SCRIPTS = {
   "kg:mcp:config": "node tools/semantic-kg.mjs mcp-config",
   "kg:path": "node tools/semantic-kg.mjs path",
   "kg:baseline": "node tools/semantic-kg.mjs baseline",
+  "kg:eval": "node tools/semantic-kg.mjs eval",
 };
 
 function usage() {
@@ -115,7 +118,8 @@ Usage:
   node tools/semantic-kg.mjs mcp
   node tools/semantic-kg.mjs mcp-config [--client=all|generic|claude-desktop|clawpilot] [--smoke-test]
   node tools/semantic-kg.mjs path "A" "B"
-  node tools/semantic-kg.mjs baseline "query one" "query two"`);
+  node tools/semantic-kg.mjs baseline "query one" "query two"
+  node tools/semantic-kg.mjs eval [--k=5] [--limit=20] [--auto=30] [--cases=path] [--min-hit-rate=0.8] [--strict]`);
 }
 function ensureDir(d) { fs.mkdirSync(d, { recursive: true }); }
 function posix(p) { return p.split(path.sep).join("/"); }
@@ -766,6 +770,120 @@ function neighborhoodResult(needle, depth = 1, limit = 40) {
   };
 }
 function baseline(args) { const qs = args.length ? args : ["architecture", "build deploy", "auth state", "ui component"]; const results = qs.map(q => { const start = Date.now(); let out = ""; const old = console.log; console.log = (...x) => { out += x.join(" ") + "\n"; }; query([q]); console.log = old; return { query: q, ms: Date.now() - start, outputKB: Math.round(Buffer.byteLength(out) / 102.4) / 10 }; }); fs.writeFileSync(path.join(OUT_DIR, "baseline.json"), JSON.stringify({ generatedAt: new Date().toISOString(), tests: results }, null, 2)); console.table(results); }
+function parseEvalArgs(args) {
+  const opts = { k: 5, limit: 20, auto: 30, cases: null, minHitRate: 0.8, strict: false };
+  for (const arg of args) {
+    if (arg.startsWith("--k=")) opts.k = Math.max(1, Number(arg.slice(4)) || 5);
+    else if (arg.startsWith("--limit=")) opts.limit = Math.max(1, Math.min(30, Number(arg.slice(8)) || 20));
+    else if (arg.startsWith("--auto=")) opts.auto = Math.max(1, Math.min(200, Number(arg.slice(7)) || 30));
+    else if (arg.startsWith("--cases=")) opts.cases = arg.slice(8);
+    else if (arg.startsWith("--min-hit-rate=")) opts.minHitRate = Math.max(0, Math.min(1, Number(arg.slice(15)) || 0.8));
+    else if (arg === "--strict") opts.strict = true;
+  }
+  return opts;
+}
+function round2(x) { return Math.round(x * 100) / 100; }
+function median(nums) {
+  const a = nums.filter(n => typeof n === "number").sort((x, y) => x - y);
+  if (!a.length) return null;
+  const mid = Math.floor(a.length / 2);
+  return a.length % 2 ? a[mid] : Math.round((a[mid - 1] + a[mid]) / 2);
+}
+function autoEvalCases(g, max) {
+  const labelCounts = new Map();
+  for (const n of g.nodes) { const l = String(n.label || "").toLowerCase(); labelCounts.set(l, (labelCounts.get(l) || 0) + 1); }
+  const uniqueLabel = n => labelCounts.get(String(n.label || "").toLowerCase()) === 1;
+  const codeNodes = g.nodes
+    .filter(n => ["symbol", "component"].includes(n.kind) && n.path && n.line && String(n.label || "").length >= 4 && !isGenericSymbol(n.label) && uniqueLabel(n))
+    .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+  const docNodes = g.nodes
+    .filter(n => n.kind === "section" && n.path && String(n.label || "").length >= 5 && uniqueLabel(n))
+    .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+  const cases = [];
+  const codeTarget = Math.ceil(max * 0.75);
+  const codeStride = Math.max(1, Math.floor(codeNodes.length / Math.max(1, codeTarget)));
+  for (let i = 0; i < codeNodes.length && cases.length < codeTarget; i += codeStride) cases.push({ query: codeNodes[i].label, intent: "code", expect: { id: codeNodes[i].id }, source: "auto-code" });
+  const docStride = Math.max(1, Math.floor(docNodes.length / Math.max(1, max - cases.length)));
+  for (let i = 0; i < docNodes.length && cases.length < max; i += docStride) cases.push({ query: docNodes[i].label, intent: "docs", expect: { id: docNodes[i].id }, source: "auto-docs" });
+  return cases;
+}
+function matchExpect(hit, expect = {}) {
+  const n = hit.node || {};
+  if (expect.id && n.id === expect.id) return true;
+  if (expect.label && String(n.label || "").toLowerCase() === String(expect.label).toLowerCase()) return true;
+  if (expect.path && n.path) { const ep = String(expect.path).toLowerCase(), np = String(n.path).toLowerCase(); if (np === ep || np.endsWith(ep)) return true; }
+  return false;
+}
+function evalResult(args = []) {
+  const opts = Array.isArray(args) ? parseEvalArgs(args) : { k: args?.k || 5, limit: args?.limit || 20, auto: args?.auto || 30, cases: args?.cases || null, minHitRate: args?.minHitRate ?? 0.8, strict: false };
+  const g = load();
+  let cases;
+  let casesSource;
+  if (opts.cases && fs.existsSync(opts.cases)) { cases = JSON.parse(fs.readFileSync(opts.cases, "utf8")); casesSource = opts.cases; }
+  else { cases = autoEvalCases(g, opts.auto); casesSource = "auto-generated"; }
+  if (!Array.isArray(cases) || !cases.length) throw new Error("No evaluation cases available. Provide --cases=<file> or build a richer graph.");
+  const rows = [];
+  for (const c of cases) {
+    const res = queryResult({ query: c.query, intent: c.intent || "auto", limit: opts.limit });
+    let rank = null;
+    for (let i = 0; i < res.hits.length; i++) { if (matchExpect(res.hits[i], c.expect || {})) { rank = i + 1; break; } }
+    let tokensToAnswer = null;
+    if (rank) { let t = estimateTokens(c.query); for (let i = 0; i < rank; i++) t += estimateTokens(hitRaw(res.hits[i])); tokensToAnswer = t; }
+    rows.push({ query: c.query, intent: res.intent, expect: c.expect || {}, rank, hitAt1: rank === 1, hitAtK: rank !== null && rank <= opts.k, tokensToAnswer, hitCount: res.hits.length, source: c.source || "file" });
+  }
+  const n = rows.length;
+  const found = rows.filter(r => r.rank !== null);
+  const hitK = rows.filter(r => r.hitAtK).length;
+  const summary = {
+    generatedAt: new Date().toISOString(),
+    casesSource,
+    cases: n,
+    k: opts.k,
+    hitRateAtK: round2(hitK / n),
+    hitRateAt1: round2(rows.filter(r => r.hitAt1).length / n),
+    mrr: round2(rows.reduce((s, r) => s + (r.rank ? 1 / r.rank : 0), 0) / n),
+    misses: rows.filter(r => r.rank === null).length,
+    medianTokensToAnswer: median(found.map(r => r.tokensToAnswer)),
+    minHitRate: opts.minHitRate,
+    pass: hitK / n >= opts.minHitRate,
+  };
+  ensureDir(OUT_DIR);
+  fs.writeFileSync(EVAL_REPORT_JSON, JSON.stringify({ summary, rows }, null, 2));
+  const worst = rows.filter(r => r.rank === null || r.rank > opts.k).slice(0, 15);
+  const mdLines = [
+    "# Graph-It evaluation report",
+    "",
+    `Generated: ${summary.generatedAt}`,
+    `Cases: ${summary.cases} (${summary.casesSource})`,
+    "",
+    "| Metric | Value |",
+    "|---|---:|",
+    `| hit@1 | ${summary.hitRateAt1} |`,
+    `| hit@${summary.k} | ${summary.hitRateAtK} |`,
+    `| MRR | ${summary.mrr} |`,
+    `| Misses | ${summary.misses} |`,
+    `| Median tokens-to-answer | ${summary.medianTokensToAnswer ?? "n/a"} |`,
+    `| Pass (hit@${summary.k} >= ${summary.minHitRate}) | ${summary.pass ? "yes" : "no"} |`,
+    "",
+    "## Cases not answered within k",
+    "",
+    worst.length ? "| Query | Intent | Rank | Expected |\n|---|---|---:|---|" : "All cases answered within k.",
+    ...worst.map(r => `| ${md(r.query)} | ${r.intent} | ${r.rank ?? "miss"} | ${md(r.expect.id || r.expect.label || r.expect.path || "")} |`),
+    "",
+  ];
+  fs.writeFileSync(EVAL_REPORT_MD, mdLines.join("\n"));
+  return { summary, rows };
+}
+function evaluate(args = []) {
+  const opts = parseEvalArgs(args);
+  const { summary } = evalResult(args);
+  console.log(`Cases: ${summary.cases} (${summary.casesSource})`);
+  console.log(`hit@1: ${summary.hitRateAt1}  hit@${summary.k}: ${summary.hitRateAtK}  MRR: ${summary.mrr}  misses: ${summary.misses}`);
+  console.log(`Median tokens-to-answer: ${summary.medianTokensToAnswer ?? "n/a"}`);
+  console.log(`Result: ${summary.pass ? "PASS" : "FAIL"} (threshold hit@${summary.k} >= ${summary.minHitRate})`);
+  console.log(`Wrote ${path.relative(ROOT, EVAL_REPORT_JSON)} and ${path.relative(ROOT, EVAL_REPORT_MD)}`);
+  if (opts.strict && !summary.pass) process.exitCode = 1;
+}
 
 function computeQuality(g) {
   const graphAdj = adj(g);
@@ -2792,6 +2910,21 @@ const MCP_TOOLS = [
     },
   },
   {
+    name: "graph.eval",
+    description: "Run a local retrieval-quality evaluation (hit@1, hit@k, MRR, tokens-to-answer) using auto-generated cases from the graph or a supplied cases file. Use to check whether graph queries reliably surface the right symbols/sections.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        k: { type: "number", minimum: 1, description: "Rank cutoff for hit@k. Defaults to 5." },
+        limit: { type: "number", minimum: 1, maximum: 30, description: "Query hit limit per case. Defaults to 20." },
+        auto: { type: "number", minimum: 1, maximum: 200, description: "Number of auto-generated cases when no cases file is given. Defaults to 30." },
+        cases: { type: "string", description: "Optional path to a JSON cases file (array of { query, intent?, expect:{ id|label|path } })." },
+        minHitRate: { type: "number", minimum: 0, maximum: 1, description: "Pass threshold for hit@k. Defaults to 0.8." },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
     name: "graph.mcp_config",
     description: "Return copy-ready local MCP client configuration for this Graph-It project.",
     inputSchema: {
@@ -2854,6 +2987,7 @@ function callMcpTool(name, args = {}) {
     return mcpContent({ message: proofed.output, proofDir: path.relative(ROOT, PROOF_DIR) });
   }
   if (name === "graph.mcp_config") return mcpContent(mcpConfigResult([`--client=${args.client || "all"}`, ...(args.smokeTest ? ["--smoke-test"] : [])]));
+  if (name === "graph.eval") return mcpContent(evalResult({ k: args.k || 5, limit: args.limit || 20, auto: args.auto || 30, cases: args.cases || null, minHitRate: args.minHitRate ?? 0.8 }));
   throw new Error(`Unknown MCP tool: ${name}`);
 }
 function sendMcpMessage(message) {
@@ -2959,4 +3093,5 @@ else if (cmd === "mcp") mcp();
 else if (cmd === "mcp-config") mcpConfig(args);
 else if (cmd === "path") pathBetween(args[0] || "", args[1] || "");
 else if (cmd === "baseline") baseline(args);
+else if (cmd === "eval") evaluate(args);
 else { console.error(`Unknown command: ${cmd}`); usage(); process.exit(1); }

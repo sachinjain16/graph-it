@@ -49,6 +49,7 @@
     "kg:mcp:config": "node tools/semantic-kg.mjs mcp-config",
     "kg:path": "node tools/semantic-kg.mjs path",
     "kg:baseline": "node tools/semantic-kg.mjs baseline",
+    "kg:eval": "node tools/semantic-kg.mjs eval",
     "check": "node --check tools/semantic-kg.mjs",
     "test": "node tests/smoke.mjs"
   },

@@ -83,6 +83,7 @@ npm run kg:freshness
 npm run kg:session-prompt -- --print
 npm run kg:quality
 npm run kg:proof -- "architecture" "security privacy" "install"
+npm run kg:eval -- --k=5 --auto=30
 npm run kg:query -- --intent=code "TargetSymbol"
 npm run kg:delta
 ```

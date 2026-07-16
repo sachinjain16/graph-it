@@ -93,6 +93,9 @@ All of the following are implemented and covered by `tests/smoke.mjs`:
 - Next-read range de-duplication.
 - MCP session ledger that collapses repeated packs to reversible pointers.
 - Output-discipline guidance in the session prompt and agent rules.
+- A local evaluation harness (`eval`): hit@1, hit@k, MRR, and tokens-to-answer over
+  auto-generated or user-supplied cases, so retrieval quality is a regression test rather
+  than an assumption.
 
 ## 6. Intentionally out of scope
 

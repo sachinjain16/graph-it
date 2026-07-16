@@ -54,6 +54,11 @@ try {
   if (!(statsOut.graphApproxTokens > 0)) throw new Error("stats missing graphApproxTokens");
 
   run("node", ["tools/semantic-kg.mjs", "quality"]);
+  const evalOut = run("node", ["tools/semantic-kg.mjs", "eval", "--k=5", "--auto=15"]);
+  const evalJson = JSON.parse(fs.readFileSync(path.join(tmp, ".semantic-kg/eval-report.json"), "utf8"));
+  if (!(evalJson.summary.cases > 0)) throw new Error("Eval produced no cases");
+  if (typeof evalJson.summary.hitRateAtK !== "number") throw new Error("Eval missing hitRateAtK");
+  if (evalJson.summary.hitRateAtK < 0.7) throw new Error(`Eval hit@k regressed: ${evalJson.summary.hitRateAtK}`);
   run("node", ["tools/semantic-kg.mjs", "export", "all"]);
   run("node", ["tools/semantic-kg.mjs", "proof", "architecture", "bootstrapGraphIt"]);
   run("node", ["tools/semantic-kg.mjs", "obsidian"]);
@@ -69,6 +74,8 @@ try {
   assertFile(".semantic-kg/exports/graph.cypher");
   assertFile(".semantic-kg/exports/graph.svg");
   assertFile(".semantic-kg/proof/proof.md");
+  assertFile(".semantic-kg/eval-report.json");
+  assertFile(".semantic-kg/eval-report.md");
   assertFile(".semantic-kg/freshness.json");
   assertFile(".semantic-kg/session-start.md");
   assertFile(".semantic-kg/context-pack.json");

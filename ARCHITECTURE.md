@@ -30,7 +30,7 @@ walk project
 | `graph-it` | Package CLI alias for the same runtime. |
 | `semantic-kg` | Compatibility CLI alias. |
 | npm `kg:*` scripts | Repo-local command shortcuts. |
-| MCP stdio server | Agent tool interface for graph query/path/node/build/delta/freshness/export/proof/config. |
+| MCP stdio server | Agent tool interface for graph query/pack/path/node/build/delta/freshness/export/proof/eval/config. |
 | Agent-rule packs | Query-first instructions for agents that do not use MCP. |
 
 ## Generated artifacts
@@ -44,7 +44,8 @@ walk project
 | `.semantic-kg/session-start.md` | Dev-session kickoff prompt with Graph-It guardrails. |
 | `.semantic-kg/delta-report.{json,md}` | Current-vs-previous graph changes. |
 | `.semantic-kg/drift-report.{json,md}` | Docs/narrative drift checks. |
-| `.semantic-kg/proof/` | Local proof packs with quality and query-compression evidence. |
+| `.semantic-kg/proof/` | Local proof packs with quality and query size-comparison evidence. |
+| `.semantic-kg/eval-report.{json,md}` | Retrieval-quality metrics (hit@1, hit@k, MRR, tokens-to-answer). |
 | `.semantic-kg/exports/` | GraphML, Cypher, SVG, and manifest exports. |
 | `.semantic-kg/wiki/` | Agent-readable topic/community pages and Obsidian export. |
 | `.semantic-kg/graph.html` | Standalone local graph viewer. |

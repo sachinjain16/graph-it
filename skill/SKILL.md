@@ -68,6 +68,7 @@ Workflow:
 7. Run `quality` and review `.semantic-kg/quality.md` before relying on the graph.
 8. Run 3-5 representative query tests based on likely agent tasks, including at least one `--intent=code` exact-symbol lookup and one `--intent=docs` lookup.
 9. Run `proof` with representative queries to capture quality, top hits, and a local context size comparison.
+10. Run `eval` (auto cases, or a `--cases` file) to check retrieval quality (hit@1, hit@k, MRR, tokens-to-answer) and catch ranking regressions.
 10. Run `impact` for one important component/symbol to verify code/docs touchpoints are useful.
 11. Run `drift` when the project has narrative docs or release notes that should stay aligned with shipped work. Check the console output and saved drift report artifacts.
 12. Run `export all` when downstream graph tools need GraphML, Cypher, or SVG.

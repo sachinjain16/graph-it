@@ -127,6 +127,7 @@ npm run kg:mcp:config -- --smoke-test
 | `freshness` | Print current graph freshness and changed-file diff. |
 | `session-prompt --print` | Generate a guarded dev-session starter prompt. |
 | `proof "query"` | Write local quality/query proof artifacts. |
+| `eval [--k=5] [--auto=30] [--cases=path]` | Run a local retrieval-quality evaluation (hit@1, hit@k, MRR, tokens-to-answer) as a regression guardrail. |
 | `export all` | Write GraphML, Cypher, SVG, and manifest. |
 | `wiki` / `obsidian` / `viewer` | Write local navigation surfaces, including an Obsidian vault. |
 | `enrich --provider local --extract-text` | Create local sidecars for text-like, basic PDF, and Office ZIP/XML text. |
@@ -172,6 +173,7 @@ Graph-It exposes these local tools over stdio:
 - `graph.freshness`
 - `graph.export`
 - `graph.proof`
+- `graph.eval`
 - `graph.mcp_config`
 
 The server communicates over stdio only. The host agent decides what, if anything, to show outside the local session.
@@ -229,6 +231,28 @@ should never read `graph.json` whole — query it through `graph.query`, `graph.
 `graph.node`, `graph.neighborhood`, or `graph.path`, then open only the suggested
 next-read line ranges. Generated agent rules and the session-start prompt include this
 rule.
+
+## Evaluation
+
+Retrieval quality is a testable property, not a vibe. `eval` scores whether a query
+actually surfaces the right node near the top:
+
+```powershell
+npm run kg:eval -- --k=5 --auto=40
+```
+
+By default it auto-generates cases from the graph (query a known symbol/section, expect
+that node back) so it always has a baseline with no authoring. You can also supply your
+own cases file for domain-specific questions:
+
+```powershell
+npm run kg:eval -- --cases=eval/cases.json --k=5 --min-hit-rate=0.8 --strict
+```
+
+Each case is `{ "query": "...", "intent": "code|docs", "expect": { "id" | "label" | "path": "..." } }`.
+It reports `hit@1`, `hit@k`, MRR, misses, and median **tokens-to-answer**, and writes
+`.semantic-kg/eval-report.{json,md}`. With `--strict` it exits non-zero when `hit@k`
+falls below the threshold, so it can gate CI and catch ranking regressions.
 
 ## Auto-refresh and session start
 
@@ -322,7 +346,8 @@ Bootstrap adds these scripts to npm-based target repos when they are missing:
     "kg:mcp": "node tools/semantic-kg.mjs mcp",
     "kg:mcp:config": "node tools/semantic-kg.mjs mcp-config",
     "kg:path": "node tools/semantic-kg.mjs path",
-    "kg:baseline": "node tools/semantic-kg.mjs baseline"
+    "kg:baseline": "node tools/semantic-kg.mjs baseline",
+    "kg:eval": "node tools/semantic-kg.mjs eval"
   }
 }
 ```
