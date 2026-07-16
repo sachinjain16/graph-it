@@ -223,6 +223,11 @@ Token estimates come from a dependency-free approximation that is intentionally
 conservative for code (identifiers and punctuation tokenize densely). They are a local
 planning aid, not an exact tokenizer count.
 
+For exact counts, opt in with `--tokenizer=exact` (or set `GRAPHIT_TOKENIZER=exact`). If a
+local BPE package (`gpt-tokenizer` or `js-tiktoken`) is installed it is used; otherwise
+Graph-It prints a notice and keeps the conservative heuristic. The default runtime stays
+dependency-free.
+
 ## Token discipline
 
 `.semantic-kg/graph.json` is the full graph and can be large. Each build stamps it with

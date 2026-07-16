@@ -31,6 +31,22 @@ const POST_COMMIT_HOOK = path.join(ROOT, ".git", "hooks", "post-commit");
 const TOOL_PATH = path.join(ROOT, "tools", "semantic-kg.mjs");
 const TOOL_SOURCE_PATH = path.resolve(process.argv[1] || TOOL_PATH);
 const INCLUDE_GENERATED = process.argv.includes("--include-generated");
+const TOKENIZER_MODE = ((process.argv.find(a => a.startsWith("--tokenizer=")) || "").split("=")[1]) || process.env.GRAPHIT_TOKENIZER || "heuristic";
+let exactEncode = null;
+async function initExactTokenizer() {
+  // Opt-in only. Uses a local BPE package if the user installed one; otherwise the
+  // dependency-free heuristic stays in effect. No network, no bundled multi-MB table.
+  const candidates = ["gpt-tokenizer", "js-tiktoken"];
+  for (const mod of candidates) {
+    try {
+      const m = await import(mod);
+      if (mod === "gpt-tokenizer" && typeof m.encode === "function") { exactEncode = t => m.encode(String(t || "")).length; return { ok: true, provider: mod }; }
+      if (mod === "js-tiktoken" && typeof m.getEncoding === "function") { const enc = m.getEncoding("cl100k_base"); exactEncode = t => enc.encode(String(t || "")).length; return { ok: true, provider: mod }; }
+    } catch { /* package not installed; try next */ }
+  }
+  return { ok: false };
+}
+function tokenizerName() { return exactEncode ? "exact" : "heuristic"; }
 
 const EXCLUDED_DIRS = new Set([".git", ".semantic-kg", ".graph-it", "node_modules", ".next", "dist", "coverage", ".cache", ".turbo"]);
 const GENERATED_DIRS = new Set(["build", "dist", "out", "target", "coverage"]);
@@ -119,7 +135,10 @@ Usage:
   node tools/semantic-kg.mjs mcp-config [--client=all|generic|claude-desktop|clawpilot] [--smoke-test]
   node tools/semantic-kg.mjs path "A" "B"
   node tools/semantic-kg.mjs baseline "query one" "query two"
-  node tools/semantic-kg.mjs eval [--k=5] [--limit=20] [--auto=30] [--cases=path] [--min-hit-rate=0.8] [--strict]`);
+  node tools/semantic-kg.mjs eval [--k=5] [--limit=20] [--auto=30] [--cases=path] [--min-hit-rate=0.8] [--strict]
+
+Global flags:
+  --tokenizer=exact   Use an installed local BPE tokenizer (gpt-tokenizer or js-tiktoken) for exact token counts; falls back to the conservative heuristic if none is installed.`);
 }
 function ensureDir(d) { fs.mkdirSync(d, { recursive: true }); }
 function posix(p) { return p.split(path.sep).join("/"); }
@@ -272,6 +291,7 @@ function build() {
   g.stats = { nodes: g.nodes.length, edges: g.edges.length, files: g.nodes.filter(n => n.id.startsWith("file:")).length, topics: g.nodes.filter(n => n.kind === "topic").length, symbols: g.nodes.filter(n => n.kind === "symbol").length, components: g.nodes.filter(n => n.kind === "component").length, inferredEdges: g.edges.filter(e => e.evidence === "INFERRED").length };
   if (fs.existsSync(GRAPH_PATH)) fs.copyFileSync(GRAPH_PATH, PREVIOUS_GRAPH_PATH);
   g._approxTokens = estimateTokens(JSON.stringify(g, null, 2));
+  g._tokenizer = tokenizerName();
   g._warning = `Do not load this file whole into an LLM (~${g._approxTokens} tokens). Query it via graph.query / graph.pack / graph.node instead.`;
   fs.writeFileSync(GRAPH_PATH, JSON.stringify(g, null, 2));
   console.log(`Built ${path.relative(ROOT, GRAPH_PATH)}: ${g.stats.nodes} nodes, ${g.stats.edges} edges.`);
@@ -486,6 +506,9 @@ function query(args) {
   }
 }
 function estimateTokens(text) {
+  // Prefer an exact BPE count when an opt-in tokenizer was loaded; otherwise fall back
+  // to the conservative, dependency-free approximation below.
+  if (exactEncode) { try { return Math.max(0, exactEncode(text)); } catch { /* fall through */ } }
   // Conservative, dependency-free BPE approximation. Plain bytes/4 undercounts code:
   // identifiers, numbers, and (especially) punctuation tokenize far denser than 4
   // bytes/token. We weight each class separately and round up so estimates never come
@@ -635,6 +658,7 @@ function packResult(args) {
     query: opts.q,
     intent: queryPack.intent,
     budgetTokens: budget,
+    tokenizer: tokenizerName(),
     originalTokens,
     packedTokens,
     withinBudget: packedTokens <= budget,
@@ -731,7 +755,7 @@ function pathResult(aName, bName) {
   while (cur) { const p = prev.get(cur); steps.push({ id: cur, via: p?.via }); cur = p?.from; }
   return { found: true, from: compactNode(start), to: compactNode(end), steps: steps.reverse().map(s => ({ via: s.via || null, node: compactNode(nodes.get(s.id)) })) };
 }
-function statsResult() { const g = load(); return { ...g.stats, generatedAt: g.generatedAt, root: g.root, graphPath: path.relative(ROOT, GRAPH_PATH), graphApproxTokens: g._approxTokens ?? estimateTokens(JSON.stringify(g)), graphReadHint: "Do not read graph.json raw. Use graph.query / graph.pack / graph.node." }; }
+function statsResult() { const g = load(); const stamped = g._tokenizer === tokenizerName() && g._approxTokens != null; return { ...g.stats, generatedAt: g.generatedAt, root: g.root, graphPath: path.relative(ROOT, GRAPH_PATH), graphApproxTokens: stamped ? g._approxTokens : estimateTokens(JSON.stringify(g)), tokenizer: tokenizerName(), graphReadHint: "Do not read graph.json raw. Use graph.query / graph.pack / graph.node." }; }
 function stats() { console.log(JSON.stringify(statsResult(), null, 2)); }
 function nodeResult(needle) {
   const g = load();
@@ -3063,7 +3087,11 @@ function mcp() {
   });
 }
 
-const [cmd, ...args] = process.argv.slice(2);
+if (TOKENIZER_MODE === "exact") {
+  const loaded = await initExactTokenizer();
+  if (!loaded.ok) console.error("[graph-it] --tokenizer=exact requested but no local tokenizer package (gpt-tokenizer or js-tiktoken) is installed; using the conservative heuristic.");
+}
+const [cmd, ...args] = process.argv.slice(2).filter(a => !a.startsWith("--tokenizer="));
 if (!cmd || cmd === "help" || cmd === "--help") usage();
 else if (cmd === "build") build();
 else if (cmd === "stats") stats();

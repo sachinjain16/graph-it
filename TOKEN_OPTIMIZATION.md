@@ -65,9 +65,10 @@ Token counts come from a dependency-free approximation that weights identifiers,
 numbers, punctuation, and whitespace separately, and never reports below a plain
 character-based floor. This is intentionally conservative for code, where punctuation and
 identifiers tokenize densely. The numbers are a local planning aid for budgeting the
-context pack — not an exact tokenizer count, and not a savings claim. If exact counts are
-ever needed, an explicit tokenizer could be added behind an opt-in flag without changing
-the default dependency-free behavior.
+context pack — not an exact tokenizer count, and not a savings claim. When exact counts
+are needed, opt in with `--tokenizer=exact` (or `GRAPHIT_TOKENIZER=exact`): Graph-It uses
+a locally installed BPE package (`gpt-tokenizer` or `js-tiktoken`) when present and
+otherwise falls back to the heuristic, so the default runtime stays dependency-free.
 
 ## 4. Design decisions
 
@@ -85,6 +86,8 @@ the default dependency-free behavior.
 All of the following are implemented and covered by `tests/smoke.mjs`:
 
 - Conservative token estimator and a plain floor.
+- Opt-in exact tokenizer (`--tokenizer=exact` / `GRAPHIT_TOKENIZER=exact`) using a local
+  BPE package when installed, with graceful fallback to the heuristic.
 - `graph.json` gating: `_warning` + `_approxTokens` header, `graphApproxTokens` in stats,
   and raw-read prohibition in the session prompt and agent-rule packs.
 - Importance-aware ranking (personalized PageRank blended into scoring).

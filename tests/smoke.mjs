@@ -52,6 +52,9 @@ try {
   if (!(graph._approxTokens >= bytesOver4)) throw new Error("Estimator regressed below bytes/4 (should be conservative for code)");
   const statsOut = JSON.parse(run("node", ["tools/semantic-kg.mjs", "stats"]));
   if (!(statsOut.graphApproxTokens > 0)) throw new Error("stats missing graphApproxTokens");
+  if (statsOut.tokenizer !== "heuristic") throw new Error("default tokenizer should be heuristic");
+  const statsExact = JSON.parse(run("node", ["tools/semantic-kg.mjs", "stats", "--tokenizer=exact"]));
+  if (statsExact.tokenizer !== "heuristic") throw new Error("exact request without a package should fall back to heuristic");
 
   run("node", ["tools/semantic-kg.mjs", "quality"]);
   const evalOut = run("node", ["tools/semantic-kg.mjs", "eval", "--k=5", "--auto=15"]);
