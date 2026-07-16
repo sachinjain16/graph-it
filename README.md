@@ -192,6 +192,17 @@ Graph-It uses dependency-free deterministic extraction by default:
 
 This is intentionally not a cloud RAG pipeline. Optional richer OCR, PDF, Office, AST, or model adapters should remain explicit and reviewable.
 
+### Optional AST call edges
+
+By default, code symbols and references are found with deterministic pattern matching.
+For a more accurate reference graph on JS/TS, opt in with `--ast` (or `GRAPHIT_AST=1`).
+When a local parser (`@babel/parser` or `acorn`) is installed, Graph-It parses each JS/TS
+file and adds AST-accurate `REFERENCES` edges (caller → callee) labeled `EXTRACTED`. These
+real call edges sharpen importance ranking and next-read suggestions. If no parser is
+installed, Graph-It prints a notice and keeps the deterministic extraction — the default
+runtime stays dependency-free. Build output reports the AST call-edge count, and
+`graph.stats` exposes `astCallEdges`.
+
 ## Context Pack
 
 Graph-It includes a lightweight, token-aware context packer. It does not proxy model

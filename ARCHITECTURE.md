@@ -89,7 +89,7 @@ Existing different runtimes are not overwritten unless `--force` is passed.
 
 Graph-It intentionally keeps the default runtime dependency-free. Future adapters should remain optional:
 
-- parser-backed AST extraction
+- parser-backed AST extraction (available today as opt-in `--ast` using a locally installed `@babel/parser` or `acorn`)
 - richer local PDF extraction
 - local OCR
 - Office extraction beyond ZIP/XML text

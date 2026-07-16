@@ -47,6 +47,46 @@ async function initExactTokenizer() {
   return { ok: false };
 }
 function tokenizerName() { return exactEncode ? "exact" : "heuristic"; }
+const AST_MODE = process.argv.includes("--ast") || process.env.GRAPHIT_AST === "1" || process.env.GRAPHIT_AST === "exact";
+let astParse = null;
+async function initAstParser() {
+  // Opt-in only. Uses a locally installed pure-JS parser when available; otherwise the
+  // deterministic regex extraction stays in effect. No native build, no network.
+  try { const m = await import("@babel/parser"); if (typeof m.parse === "function") { astParse = code => m.parse(code, { sourceType: "unambiguous", errorRecovery: true, allowReturnOutsideFunction: true, plugins: ["typescript", "jsx"] }); return { ok: true, provider: "@babel/parser" }; } } catch { /* not installed */ }
+  try { const m = await import("acorn"); if (typeof m.parse === "function") { astParse = code => m.parse(code, { ecmaVersion: "latest", sourceType: "module", locations: true, allowReturnOutsideFunction: true }); return { ok: true, provider: "acorn" }; } } catch { /* not installed */ }
+  return { ok: false };
+}
+function astCalleeName(callee) {
+  if (!callee) return null;
+  if (callee.type === "Identifier") return callee.name;
+  if (callee.type === "MemberExpression" && callee.property) return callee.property.name || null;
+  return null;
+}
+function astEnclosingName(node) {
+  if (!node || typeof node.type !== "string") return null;
+  if ((node.type === "FunctionDeclaration" || node.type === "ClassDeclaration") && node.id) return node.id.name;
+  if ((node.type === "ClassMethod" || node.type === "MethodDefinition") && node.key) return node.key.name || null;
+  if (node.type === "VariableDeclarator" && node.id && node.id.type === "Identifier" && node.init && /Function|ArrowFunctionExpression|ClassExpression/.test(node.init.type)) return node.id.name;
+  return null;
+}
+function walkAst(node, enclosing, onCall) {
+  if (!node || typeof node !== "object") return;
+  if (Array.isArray(node)) { for (const child of node) walkAst(child, enclosing, onCall); return; }
+  if (node.type === "CallExpression" || node.type === "NewExpression") {
+    const callee = astCalleeName(node.callee);
+    if (enclosing && callee) onCall(enclosing, callee, node.loc?.start?.line || 0);
+  }
+  const nextEnclosing = astEnclosingName(node) || enclosing;
+  for (const key in node) {
+    if (key === "loc" || key === "start" || key === "end" || key === "range" || key === "leadingComments" || key === "trailingComments" || key === "comments") continue;
+    const value = node[key];
+    if (value && typeof value === "object") walkAst(value, nextEnclosing, onCall);
+  }
+}
+function astPass(p, text, calls) {
+  let ast; try { ast = astParse(text); } catch { return; }
+  walkAst(ast, null, (caller, callee, line) => { if (caller !== callee) calls.push({ p, caller, callee, line }); });
+}
 
 const EXCLUDED_DIRS = new Set([".git", ".semantic-kg", ".graph-it", "node_modules", ".next", "dist", "coverage", ".cache", ".turbo"]);
 const GENERATED_DIRS = new Set(["build", "dist", "out", "target", "coverage"]);
@@ -138,7 +178,8 @@ Usage:
   node tools/semantic-kg.mjs eval [--k=5] [--limit=20] [--auto=30] [--cases=path] [--min-hit-rate=0.8] [--strict]
 
 Global flags:
-  --tokenizer=exact   Use an installed local BPE tokenizer (gpt-tokenizer or js-tiktoken) for exact token counts; falls back to the conservative heuristic if none is installed.`);
+  --tokenizer=exact   Use an installed local BPE tokenizer (gpt-tokenizer or js-tiktoken) for exact token counts; falls back to the conservative heuristic if none is installed.
+  --ast               Use an installed local parser (@babel/parser or acorn) to add AST-accurate call/reference edges for JS/TS; falls back to regex extraction if none is installed.`);
 }
 function ensureDir(d) { fs.mkdirSync(d, { recursive: true }); }
 function posix(p) { return p.split(path.sep).join("/"); }
@@ -273,6 +314,7 @@ function build() {
   ensureDir(OUT_DIR); ensureDir(CACHE_DIR);
   const g = { schemaVersion: 1, generatedAt: new Date().toISOString(), root: ROOT, includeGenerated: INCLUDE_GENERATED, nodes: [], edges: [], stats: {}, _nodes: new Set(), _edges: new Set() };
   for (const t of SEMANTIC_TOPICS) addNode(g, { id: t.id, kind: "topic", label: t.label, aliases: t.aliases, summary: `Semantic topic for ${t.label}.`, tokens: tokenize(`${t.label} ${t.aliases.join(" ")}`) });
+  const astCalls = [];
   for (const abs of walk(ROOT)) {
     const p = rel(abs); const ext = path.extname(abs).toLowerCase(); const bytes = fs.readFileSync(abs); const hash = sha(bytes); const kind = kindFor(ext);
     const text = TEXT_EXTS.has(ext) ? fs.readFileSync(abs, "utf8") : "";
@@ -282,19 +324,37 @@ function build() {
     addNode(g, node);
     fs.writeFileSync(path.join(CACHE_DIR, `${hash}.json`), JSON.stringify({ path: p, sha256: hash, bytes: bytes.length, tokens: node.tokens.slice(0, 40) }, null, 2));
     if (text) indexText(g, p, text);
+    if (astParse && text && CODE_EXTS.has(ext)) astPass(p, text, astCalls);
     for (const topic of matchedTopics(`${p} ${summary} ${text.slice(0, 10000)}`)) addEdge(g, fileId(p), topic.id, "SEMANTICALLY_RELATED", { evidence: "INFERRED", confidence: 0.65, why: `Matched aliases for ${topic.label}.` });
     if (ARCHIVE_EXTS.has(ext)) for (const tag of path.basename(p, ext).split(/[-_\s]+/).filter(x => x.length > 2)) {
       const id = `concept:${tag.toLowerCase()}`; addNode(g, { id, kind: "concept", label: tag, tokens: tokenize(tag) }); addEdge(g, fileId(p), id, "TAGGED", { evidence: "EXTRACTED" });
     }
   }
+  let astCallEdges = 0;
+  if (astParse && astCalls.length) {
+    const labelToIds = new Map();
+    for (const n of g.nodes) if (n.kind === "symbol" || n.kind === "component") { if (!labelToIds.has(n.label)) labelToIds.set(n.label, []); labelToIds.get(n.label).push(n.id); }
+    for (const c of astCalls) {
+      const callerId = symbolId(c.p, c.caller);
+      if (!g._nodes.has(callerId)) continue;
+      let calleeId = null;
+      const sameFile = symbolId(c.p, c.callee);
+      if (g._nodes.has(sameFile)) calleeId = sameFile;
+      else { const ids = labelToIds.get(c.callee); if (ids && ids.length === 1) calleeId = ids[0]; }
+      if (!calleeId || calleeId === callerId) continue;
+      const before = g.edges.length;
+      addEdge(g, callerId, calleeId, "REFERENCES", { evidence: "EXTRACTED", why: "AST call reference" });
+      if (g.edges.length > before) astCallEdges++;
+    }
+  }
   delete g._nodes; delete g._edges;
-  g.stats = { nodes: g.nodes.length, edges: g.edges.length, files: g.nodes.filter(n => n.id.startsWith("file:")).length, topics: g.nodes.filter(n => n.kind === "topic").length, symbols: g.nodes.filter(n => n.kind === "symbol").length, components: g.nodes.filter(n => n.kind === "component").length, inferredEdges: g.edges.filter(e => e.evidence === "INFERRED").length };
+  g.stats = { nodes: g.nodes.length, edges: g.edges.length, files: g.nodes.filter(n => n.id.startsWith("file:")).length, topics: g.nodes.filter(n => n.kind === "topic").length, symbols: g.nodes.filter(n => n.kind === "symbol").length, components: g.nodes.filter(n => n.kind === "component").length, inferredEdges: g.edges.filter(e => e.evidence === "INFERRED").length, astCallEdges };
   if (fs.existsSync(GRAPH_PATH)) fs.copyFileSync(GRAPH_PATH, PREVIOUS_GRAPH_PATH);
   g._approxTokens = estimateTokens(JSON.stringify(g, null, 2));
   g._tokenizer = tokenizerName();
   g._warning = `Do not load this file whole into an LLM (~${g._approxTokens} tokens). Query it via graph.query / graph.pack / graph.node instead.`;
   fs.writeFileSync(GRAPH_PATH, JSON.stringify(g, null, 2));
-  console.log(`Built ${path.relative(ROOT, GRAPH_PATH)}: ${g.stats.nodes} nodes, ${g.stats.edges} edges.`);
+  console.log(`Built ${path.relative(ROOT, GRAPH_PATH)}: ${g.stats.nodes} nodes, ${g.stats.edges} edges${astParse ? `, ${g.stats.astCallEdges} AST call edges` : ""}.`);
 }
 function refreshGeneratedArtifacts({ wikiOutput = true, viewerOutput = true } = {}) {
   build();
@@ -3091,7 +3151,11 @@ if (TOKENIZER_MODE === "exact") {
   const loaded = await initExactTokenizer();
   if (!loaded.ok) console.error("[graph-it] --tokenizer=exact requested but no local tokenizer package (gpt-tokenizer or js-tiktoken) is installed; using the conservative heuristic.");
 }
-const [cmd, ...args] = process.argv.slice(2).filter(a => !a.startsWith("--tokenizer="));
+if (AST_MODE) {
+  const loaded = await initAstParser();
+  if (!loaded.ok) console.error("[graph-it] --ast requested but no local parser package (@babel/parser or acorn) is installed; using deterministic regex extraction.");
+}
+const [cmd, ...args] = process.argv.slice(2).filter(a => !a.startsWith("--tokenizer=") && a !== "--ast");
 if (!cmd || cmd === "help" || cmd === "--help") usage();
 else if (cmd === "build") build();
 else if (cmd === "stats") stats();

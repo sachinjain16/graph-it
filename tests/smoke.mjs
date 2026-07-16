@@ -55,6 +55,10 @@ try {
   if (statsOut.tokenizer !== "heuristic") throw new Error("default tokenizer should be heuristic");
   const statsExact = JSON.parse(run("node", ["tools/semantic-kg.mjs", "stats", "--tokenizer=exact"]));
   if (statsExact.tokenizer !== "heuristic") throw new Error("exact request without a package should fall back to heuristic");
+  if (statsOut.astCallEdges !== 0) throw new Error("default build should have 0 AST call edges without a parser");
+  run("node", ["tools/semantic-kg.mjs", "build", "--ast"]);
+  const statsAst = JSON.parse(run("node", ["tools/semantic-kg.mjs", "stats"]));
+  if (statsAst.astCallEdges !== 0) throw new Error("AST request without a parser should yield 0 AST edges, not crash");
 
   run("node", ["tools/semantic-kg.mjs", "quality"]);
   const evalOut = run("node", ["tools/semantic-kg.mjs", "eval", "--k=5", "--auto=15"]);

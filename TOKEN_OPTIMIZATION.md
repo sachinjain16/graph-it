@@ -41,7 +41,8 @@ graph, the tool stops helping. The gating below exists to prevent exactly that.
 2. **Importance-aware ranking.** Ranking blends keyword/identifier matching with a
    centrality signal (PageRank over the extracted edge graph, biased toward the nodes
    that match the query), so well-connected, query-relevant nodes rank above incidental
-   keyword hits.
+   keyword hits. With opt-in AST extraction (`--ast`), the edge graph includes
+   AST-accurate call/reference edges, which sharpens this signal further.
 3. **Budgeted context packing.** `pack` fills a token budget by graceful degradation:
    top hits at full detail, the next band in an extractive "compressed" form, and the
    remainder collapsed into a single reversible pointer. It stays within the budget give
@@ -93,6 +94,8 @@ All of the following are implemented and covered by `tests/smoke.mjs`:
 - Importance-aware ranking (personalized PageRank blended into scoring).
 - Budgeted, graceful-degradation context packing (full → compressed → reversible offload).
 - Extractive `compressed` bucket and `reloadWith` reversibility on every packed item.
+- Optional AST call/reference edges for JS/TS (`--ast` / `GRAPHIT_AST=1`) via a locally
+  installed parser, with graceful fallback to deterministic extraction.
 - Next-read range de-duplication.
 - MCP session ledger that collapses repeated packs to reversible pointers.
 - Output-discipline guidance in the session prompt and agent rules.
